@@ -18,6 +18,7 @@ import random
 import tqdm
 import numpy as np
 import wandb
+import time
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.policy.bc_policy import BehaviorCloningPolicy
 from diffusion_policy.policy.diffusion_unet_image_policy import DiffusionUnetImagePolicy
@@ -300,6 +301,8 @@ class BCRobotWorkspace(BaseWorkspace):
         self.epoch = 0
 
     def run(self):
+        training_start_time = time.time()   # 模型训练时间计时器
+        last_checkpoint_time = time.time()  # checkpoint计时器
         cfg = copy.deepcopy(self.cfg)
         seed = cfg.training.seed
         head_camera_type = cfg.head_camera_type
@@ -504,17 +507,27 @@ class BCRobotWorkspace(BaseWorkspace):
                     # checkpointing
                     save_name = pathlib.Path(self.cfg.task.dataset.zarr_path).stem + '_bc'
                     self.save_checkpoint(f'checkpoints/{save_name}_{seed}/{self.epoch + 1}.ckpt') # TODO
-                
+                    # logging time
+                    current_time = time.time()
+                    checkpoint_interval = current_time - last_checkpoint_time
+                    last_checkpoint_time = current_time
+                    step_log['checkpoint_interval'] = checkpoint_interval
                 # ========= eval end for this epoch ==========
                 policy.train()
 
                 # end of epoch
                 # log of last step is combined with validation and rollout
+                current_time = time.time()
+                step_log['total_elapsed_time'] = current_time - training_start_time
                 json_logger.log(step_log)
                 if wandb_run is not None:  # 确保wandb已初始化
                     wandb.log(step_log)    # 新增这行
                 self.global_step += 1
                 self.epoch += 1
+            total_time = time.time() - training_start_time
+            if wandb_run is not None:
+                wandb.log({'final_total_time': total_time})
+                wandb.finish()
 
 
 class BatchSampler:
