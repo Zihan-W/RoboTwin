@@ -17,8 +17,10 @@ import copy
 import random
 import tqdm
 import numpy as np
+import wandb
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.policy.bc_policy import BehaviorCloningPolicy
+from diffusion_policy.policy.diffusion_unet_image_policy import DiffusionUnetImagePolicy
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.common.checkpoint_util import TopKCheckpointManager
 from diffusion_policy.common.json_logger import JsonLogger
@@ -353,16 +355,16 @@ class BCRobotWorkspace(BaseWorkspace):
         env_runner = None
 
         # configure logging
-        # wandb_run = wandb.init(
-        #     dir=str(self.output_dir),
-        #     config=OmegaConf.to_container(cfg, resolve=True),
-        #     **cfg.logging
-        # )
-        # wandb.config.update(
-        #     {
-        #         "output_dir": self.output_dir,
-        #     }
-        # )
+        wandb_run = wandb.init(
+            dir=str(self.output_dir),
+            config=OmegaConf.to_container(cfg, resolve=True),
+            **cfg.logging
+        )
+        wandb.config.update(
+            {
+                "output_dir": self.output_dir,
+            }
+        )
 
         # configure checkpoint
         topk_manager = TopKCheckpointManager(
@@ -500,7 +502,7 @@ class BCRobotWorkspace(BaseWorkspace):
                 # checkpoint
                 if ((self.epoch + 1) % cfg.training.checkpoint_every) == 0:
                     # checkpointing
-                    save_name = pathlib.Path(self.cfg.task.dataset.zarr_path).stem
+                    save_name = pathlib.Path(self.cfg.task.dataset.zarr_path).stem + '_bc'
                     self.save_checkpoint(f'checkpoints/{save_name}_{seed}/{self.epoch + 1}.ckpt') # TODO
                 
                 # ========= eval end for this epoch ==========
@@ -509,6 +511,8 @@ class BCRobotWorkspace(BaseWorkspace):
                 # end of epoch
                 # log of last step is combined with validation and rollout
                 json_logger.log(step_log)
+                if wandb_run is not None:  # 确保wandb已初始化
+                    wandb.log(step_log)    # 新增这行
                 self.global_step += 1
                 self.epoch += 1
 
