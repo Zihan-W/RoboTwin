@@ -145,7 +145,8 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         if self.obs_as_global_cond:
             # condition through global feature
             this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
-            nobs_features = self.obs_encoder(this_nobs)
+            # ipdb> this_nobs["head_cam"].shape  torch.Size([96, 3, 240, 320])
+            nobs_features = self.obs_encoder(this_nobs) # torch.Size([96, 526])
             # reshape back to B, Do
             global_cond = nobs_features.reshape(B, -1)
             # empty data for action
@@ -171,7 +172,7 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
             **self.kwargs)
         
         # unnormalize prediction
-        naction_pred = nsample[...,:Da]
+        naction_pred = nsample[...,:Da] # torch.Size([32, 8, 14]) batch_size, n_action_steps, action_dim
         action_pred = self.normalizer['action'].unnormalize(naction_pred)
 
         # get action
@@ -206,6 +207,8 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
             # reshape B, T, ... to B*T
             this_nobs = dict_apply(nobs, 
                 lambda x: x[:,:self.n_obs_steps,...].reshape(-1,*x.shape[2:]))
+            # ipdb> this_nobs["head_cam"].shape torch.Size([96, 3, 240, 320])
+            # import ipdb; ipdb.set_trace()
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, Do
             global_cond = nobs_features.reshape(batch_size, -1)
