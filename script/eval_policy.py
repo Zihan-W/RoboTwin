@@ -89,7 +89,7 @@ def main(usr_args):
     expert_data_num = usr_args.expert_data_num
     checkpoint_num = usr_args.checkpoint_num
     seed = usr_args.seed
-    YOUR_POLICY_NAME = "BC"
+    policy_name = usr_args.policy_name
 
     with open(f'./task_config/{task_name}.yml', 'r', encoding='utf-8') as f:
         args = yaml.load(f.read(), Loader=yaml.FullLoader)
@@ -126,15 +126,15 @@ def main(usr_args):
     suc_nums = []
     test_num = 100
     topk = 1
-
-    bc = BC(task_name, head_camera_type, checkpoint_num, usr_args.expert_data_num, seed)
+    if policy_name == 'bc':
+        policy = BC(task_name, head_camera_type, checkpoint_num, expert_data_num, seed)
 
     # policy = YOUR_POLICY() # TODO: init your policy
-    st_seed, suc_num = test_policy(task_name, task, args, bc, st_seed, test_num=test_num)
+    st_seed, suc_num = test_policy(task_name, task, args, policy, st_seed, test_num=test_num)
     suc_nums.append(suc_num)
 
     topk_success_rate = sorted(suc_nums, reverse=True)[:topk]
-    save_dir = Path(f'result_{YOUR_POLICY_NAME}/{task_name}_{usr_args.head_camera_type}_{usr_args.expert_data_num}')     # TODO: add your policy name
+    save_dir = Path(f'result_{policy_name}/{task_name}_{usr_args.head_camera_type}_{usr_args.expert_data_num}')     # TODO: add your policy name
     save_dir.mkdir(parents=True, exist_ok=True)
     file_path = save_dir / f'ckpt_{checkpoint_num}_seed_{seed}.txt'
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -228,6 +228,7 @@ if __name__ == "__main__":
     parser.add_argument('expert_data_num', type=int, default=20)
     parser.add_argument('checkpoint_num', type=int, default=1000)
     parser.add_argument('seed', type=int, default=0)
+    parser.add_argument('policy_name', type=str)
     usr_args = parser.parse_args()
     
     main(usr_args)
