@@ -300,6 +300,7 @@ class BCRobotWorkspace(BaseWorkspace):
         self.global_step = 0
         self.epoch = 0
 
+
     def run(self):
         training_start_time = time.time()   # 模型训练时间计时器
         last_checkpoint_time = time.time()  # checkpoint计时器

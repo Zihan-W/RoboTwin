@@ -1,7 +1,7 @@
 
 import sys
 sys.path.append('./') 
-sys.path.insert(0, f'./policy/{YOUR_POLICY_PATH}')   # TODO: add your policy path if needed
+sys.path.insert(0, f'./policy/Diffusion-Policy/checkpoints/put_apple_cabinet_D435_20_bc')   # TODO: add your policy path if needed
 
 import torch  
 import os
@@ -16,9 +16,32 @@ from datetime import datetime
 import importlib
 import dill
 from argparse import ArgumentParser
+from diffusion_policy.env_runner.bc_runner import BCRunner
+from diffusion_policy.workspace.robotworkspace import BCRobotWorkspace
 
 current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
+
+def get_policy(checkpoint, output_dir, device=0):
+    
+    # load checkpoint
+    payload = torch.load(open('./policy/Diffusion-Policy/' + checkpoint, 'rb'), pickle_module=dill)
+    cfg = payload['cfg']
+    cls = hydra.utils.get_class(cfg._target_)
+    workspace = cls(cfg, output_dir=output_dir)
+    workspace: BCRobotWorkspace
+    workspace.load_payload(payload, exclude_keys=None, include_keys=None)
+    
+    # get policy from workspace
+    policy = workspace.model
+    if cfg.training.use_ema:
+        policy = workspace.ema_model
+    
+    device = torch.device(device)
+    policy.to(device)
+    policy.eval()
+
+    return policy
 
 def class_decorator(task_name):
     envs_module = importlib.import_module(f'envs.{task_name}')
@@ -28,6 +51,21 @@ def class_decorator(task_name):
     except:
         raise SystemExit("No Task")
     return env_instance
+
+class BC:
+    def __init__(self, task_name, head_camera_type: str, checkpoint_num: int, expert_data_num: int, seed: int):
+        self.policy = get_policy(f'checkpoints/{task_name}_{head_camera_type}_{expert_data_num}_bc_{seed}/{checkpoint_num}.ckpt', None, 'cuda:0')
+        self.runner = BCRunner(output_dir=None)
+
+    def update_obs(self, observation):
+        self.runner.update_obs(observation)
+    
+    def get_action(self, observation=None):
+        action = self.runner.get_action(self.policy, observation)
+        return action
+
+    def get_last_obs(self):
+        return self.runner.obs[-1]
 
 def get_camera_config(camera_type):
     camera_config_path = os.path.join(parent_directory, '../task_config/_camera_config.yml')
@@ -48,8 +86,10 @@ def load_model(model_path):
 def main(usr_args):
     task_name = usr_args.task_name
     head_camera_type = usr_args.head_camera_type
+    expert_data_num = usr_args.expert_data_num
     checkpoint_num = usr_args.checkpoint_num
     seed = usr_args.seed
+    YOUR_POLICY_NAME = "BC"
 
     with open(f'./task_config/{task_name}.yml', 'r', encoding='utf-8') as f:
         args = yaml.load(f.read(), Loader=yaml.FullLoader)
@@ -86,12 +126,15 @@ def main(usr_args):
     suc_nums = []
     test_num = 100
     topk = 1
-    policy = YOUR_POLICY() # TODO: init your policy
-    st_seed, suc_num = test_policy(task, args, policy, st_seed, test_num=test_num)
+
+    bc = BC(task_name, head_camera_type, checkpoint_num, usr_args.expert_data_num, seed)
+
+    # policy = YOUR_POLICY() # TODO: init your policy
+    st_seed, suc_num = test_policy(task_name, task, args, bc, st_seed, test_num=test_num)
     suc_nums.append(suc_num)
 
     topk_success_rate = sorted(suc_nums, reverse=True)[:topk]
-    save_dir = Path(f'result_{YOUR_POLICY}/{task_name}_{usr_args.head_camera_type}_{usr_args.expert_data_num}')     # TODO: add your policy name
+    save_dir = Path(f'result_{YOUR_POLICY_NAME}/{task_name}_{usr_args.head_camera_type}_{usr_args.expert_data_num}')     # TODO: add your policy name
     save_dir.mkdir(parents=True, exist_ok=True)
     file_path = save_dir / f'ckpt_{checkpoint_num}_seed_{seed}.txt'
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -165,7 +208,7 @@ def test_policy(task_name, Demo_class, args, policy, st_seed, test_num=20):
         Demo_class.close()
         if Demo_class.render_freq:
             Demo_class.viewer.close()
-        policy.env_runner.reset_obs()
+        policy.runner.reset_obs()
         print(f"{task_name} success rate: {Demo_class.suc}/{Demo_class.test_num}, current seed: {now_seed}\n")
         Demo_class._take_picture()
         now_seed += 1
@@ -180,11 +223,11 @@ if __name__ == "__main__":
 
     # Add arguments
     # TODO: modify the corresponding argument according to your policy.
-    parser.add_argument('task_name', type=str, default='block_hammer_beat')
-    parser.add_argument('head_camera_type', type=str)
-    # parser.add_argument('expert_data_num', type=int, default=20)
-    # parser.add_argument('checkpoint_num', type=int, default=1000)
-    # parser.add_argument('seed', type=int, default=0)
+    parser.add_argument('task_name', type=str, default='put_apple_cabinet')
+    parser.add_argument('head_camera_type', type=str, default='D435')
+    parser.add_argument('expert_data_num', type=int, default=20)
+    parser.add_argument('checkpoint_num', type=int, default=1000)
+    parser.add_argument('seed', type=int, default=0)
     usr_args = parser.parse_args()
     
     main(usr_args)

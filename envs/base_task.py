@@ -1921,16 +1921,20 @@ class Base_task(gym.Env):
         self.actor_pose = True
         
         while step_cnt < self.step_lim: # If it is not successful within the specified number of steps, it is judged as a failure.
-            obs = self.get_obs() # get observation
+            observation = self.get_obs() # get observation
+            obs = self.get_cam_obs(observation)
+            obs['agent_pos'] = observation['joint_action']
+            model.update_obs(obs)
             
             actions = model.get_action(obs) # TODO, get actions according to your policy and current obs
+            obs = model.get_last_obs()
 
             left_arm_actions , left_gripper , left_current_qpos, left_path = [], [], [], []
             right_arm_actions , right_gripper , right_current_qpos, right_path = [], [], [], []
 
             left_arm_actions, left_gripper = actions[:, :6], actions[:, 6] # 0-5 left joint action, 6 left gripper action
             right_arm_actions, right_gripper = actions[:, 7:13], actions[:, 13] # 7-12 right joint action, 13 right gripper action
-            left_current_qpos, right_current_qpos = obs['joint_action'][:6], obs['joint_action'][7:13]  # current joint and gripper action
+            left_current_qpos, right_current_qpos = observation['joint_action'][:6], observation['joint_action'][7:13]  # current joint and gripper action
             
 
             left_path = np.vstack((left_current_qpos, left_arm_actions))
