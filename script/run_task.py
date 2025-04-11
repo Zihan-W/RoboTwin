@@ -36,6 +36,7 @@ def get_camera_config(camera_type):
 
 def main():
     task_name = input()
+    print(task_name)
     
     task = class_decorator(task_name)
     task_config_path = f'./task_config/{task_name}.yml'
@@ -83,6 +84,7 @@ def run(Demo_class, args):
 
     if not args['use_seed']:
         while suc_num < args['episode_num']:
+            # 尝试模拟运行，如果成功，则记录seed_list，记录demo的时候使用demo_list复现轨迹并记录数据
             try:
                 Demo_class.setup_demo(now_ep_num=suc_num, seed = epid, **args)
                 Demo_class.play_once()
@@ -123,6 +125,7 @@ def run(Demo_class, args):
             seed_list = [int(i) for i in seed_list]
 
     if args['collect_data']:
+        # 存储数据集
         print('Start data collection')
 
         args['render_freq']=0
@@ -142,8 +145,10 @@ def run(Demo_class, args):
                 info_db = json.load(file)
 
             info = Demo_class.play_once()
+            print(info)
             info_db[f'{id}'] = info
             with open(info_file_path, 'w', encoding='utf-8') as file:
+                print(info_db)
                 json.dump(info_db, file, ensure_ascii=False)
 
             if Demo_class.save_type.get('raw_data', True):
