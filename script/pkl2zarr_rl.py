@@ -40,6 +40,8 @@ def main():
     head_camera_arrays, front_camera_arrays, left_camera_arrays, right_camera_arrays = [], [], [], []
     episode_ends_arrays, action_arrays, state_arrays, joint_action_arrays = [], [], [], []
     reward_arrays = []
+    apple_pose_arrays = []
+    cabinet_pose_arrays = []
 
     while os.path.isdir(load_dir+f'/episode{current_ep}') and current_ep < num:
         print(f'processing episode: {current_ep + 1} / {num}', end='\r')
@@ -53,12 +55,18 @@ def main():
             action = data['endpose']
             joint_action = data['joint_action']
             reward = data['reward']  # add reward
+            apple_pose = data['apple_pose'] # add pose
+            apple_pose = np.concatenate([apple_pose.p, apple_pose.q])   # Flatten to [x, y, z, qx, qy, qz, qw]
+            cabinet_pose = data['cabinet_pose'] # add pose
+            cabinet_pose = np.concatenate([cabinet_pose.p, cabinet_pose.q]) # Flatten to [x, y, z, qx, qy, qz, qw]
 
             head_camera_arrays.append(head_img)
             action_arrays.append(action)
             state_arrays.append(joint_action)
             joint_action_arrays.append(joint_action)
             reward_arrays.append(reward)     # add reward
+            apple_pose_arrays.append(apple_pose)  # 
+            cabinet_pose_arrays.append(cabinet_pose)  #
 
             file_num += 1
             total_count += 1
@@ -73,6 +81,8 @@ def main():
     head_camera_arrays = np.array(head_camera_arrays)
     joint_action_arrays = np.array(joint_action_arrays)
     reward_arrays = np.array(reward_arrays) # add reward
+    apple_pose_arrays = np.array(apple_pose_arrays)  # 转换为numpy数组
+    cabinet_pose_arrays = np.array(cabinet_pose_arrays)  # 转换为numpy数组
 
     head_camera_arrays = np.moveaxis(head_camera_arrays, -1, 1)  # NHWC -> NCHW
 
@@ -82,12 +92,16 @@ def main():
     joint_chunk_size = (100, joint_action_arrays.shape[1])
     head_camera_chunk_size = (100, *head_camera_arrays.shape[1:])
     reward_chunk_size = (100,)  # add reward
+    apple_pose_chunk_size = (100, 7)  # apple_pose
+    cabinet_pose_chunk_size = (100, 7)  # cabinet_pose
     zarr_data.create_dataset('head_camera', data=head_camera_arrays, chunks=head_camera_chunk_size, overwrite=True, compressor=compressor)
     zarr_data.create_dataset('tcp_action', data=action_arrays, chunks=action_chunk_size, dtype='float32', overwrite=True, compressor=compressor)
     zarr_data.create_dataset('state', data=state_arrays, chunks=state_chunk_size, dtype='float32', overwrite=True, compressor=compressor)
     zarr_data.create_dataset('action', data=joint_action_arrays, chunks=joint_chunk_size, dtype='float32', overwrite=True, compressor=compressor)
     zarr_meta.create_dataset('episode_ends', data=episode_ends_arrays, dtype='int64', overwrite=True, compressor=compressor)
     zarr_meta.create_dataset('reward', data=reward_arrays, chunks=reward_chunk_size, dtype='float32', overwrite=True, compressor=compressor)    # add reward
-
+    zarr_data.create_dataset('apple_pose', data=apple_pose_arrays, chunks=apple_pose_chunk_size, dtype='float32', overwrite=True, compressor=compressor)  # 存储apple_pose
+    zarr_data.create_dataset('cabinet_pose', data=cabinet_pose_arrays, chunks=cabinet_pose_chunk_size, dtype='float32', overwrite=True, compressor=compressor)  # 存储cabinet_pose
+    
 if __name__ == '__main__':
     main()

@@ -221,8 +221,8 @@ class put_apple_cabinet_rl(Base_task):
         #   ├─ episode_ends [Array] (20,) int64
         # 该数据集训练的是下一步机器人应该到哪个pos，TODO：或许可以改为增量输出，则数据集中应该有基于当前state采取的action数据
         # 增加并设计compute_reward函数，以计算reward
-        # TODO: 修改_take_picture函数，以保存part_poses(包括cabinet和apple的pose)、reward（调用compute_reward函数计算）、dones（每个step都记录）
-        # TODO: 修改script/pkl2zarr_rl.py，以使转换后的数据集含有reward和dones数据
+        # 修改_take_picture函数，可以保存part_poses(包括cabinet和apple的pose)、reward（调用compute_reward函数计算）
+        # 修改修改script/pkl2zarr_rl.py，可以处理含reward、apple_pose和cabinet_pose的数据集
         pose0 = list(self.cabinet.get_pose().p+[-0.054,-0.37,-0.09])+[0.5,0.5,0.5,0.5]
         pose1 = list(self.apple.get_pose().p+[0,0,0.17])+[-0.5,0.5,-0.5,-0.5]
         self.together_move_to_pose_with_screw(left_target_pose=pose0,right_target_pose=pose1)
@@ -285,7 +285,6 @@ class put_apple_cabinet_rl(Base_task):
         if not self.is_save:
             return
 
-        self.compute_reward()
         print('saving: episode = ', self.ep_num, ' index = ',self.PCD_INDEX, end='\r')
         self._update_render()
         self.left_camera.take_picture()
@@ -352,7 +351,9 @@ class put_apple_cabinet_rl(Base_task):
                 "head_camera":{},   # rbg , mesh_seg , actior_seg , depth , intrinsic_cv , extrinsic_cv , cam2world_gl(model_matrix)
                 "left_camera":{},
                 "right_camera":{},
-                "front_camera":{}
+                "front_camera":{},
+                "apple_pose":[],
+                "cabinet_pose":[],
             },
             "reward":[],    # reward
             "pointcloud":[],   # conbinet pcd
@@ -399,6 +400,10 @@ class put_apple_cabinet_rl(Base_task):
             "extrinsic_cv" : right_camera_extrinsic_cv,
             "cam2world_gl" : right_camera_model_matrix
         }
+
+        pkl_dic["apple_pose"] = self.apple.get_pose()
+
+        pkl_dic["cabinet_pose"] = self.cabinet.get_pose()
 
         pkl_dic["reward"] = self.compute_reward()
 
