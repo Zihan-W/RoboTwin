@@ -7,6 +7,7 @@ import shutil
 import argparse
 import einops
 import cv2
+import zarr.meta
 
 
 def main():
@@ -38,7 +39,8 @@ def main():
 
     head_camera_arrays, front_camera_arrays, left_camera_arrays, right_camera_arrays = [], [], [], []
     episode_ends_arrays, action_arrays, state_arrays, joint_action_arrays = [], [], [], []
-    
+    reward_arrays = []
+
     while os.path.isdir(load_dir+f'/episode{current_ep}') and current_ep < num:
         print(f'processing episode: {current_ep + 1} / {num}', end='\r')
         file_num = 0
@@ -50,11 +52,13 @@ def main():
             head_img = data['observation']['head_camera']['rgb']
             action = data['endpose']
             joint_action = data['joint_action']
+            reward = data['reward']  # add reward
 
             head_camera_arrays.append(head_img)
             action_arrays.append(action)
             state_arrays.append(joint_action)
             joint_action_arrays.append(joint_action)
+            reward_arrays.append(reward)     # add reward
 
             file_num += 1
             total_count += 1
@@ -62,13 +66,13 @@ def main():
         current_ep += 1
 
         episode_ends_arrays.append(total_count)
-
     print()
     episode_ends_arrays = np.array(episode_ends_arrays)
     action_arrays = np.array(action_arrays)
     state_arrays = np.array(state_arrays)
     head_camera_arrays = np.array(head_camera_arrays)
     joint_action_arrays = np.array(joint_action_arrays)
+    reward_arrays = np.array(reward_arrays) # add reward
 
     head_camera_arrays = np.moveaxis(head_camera_arrays, -1, 1)  # NHWC -> NCHW
 
@@ -77,11 +81,13 @@ def main():
     state_chunk_size = (100, state_arrays.shape[1])
     joint_chunk_size = (100, joint_action_arrays.shape[1])
     head_camera_chunk_size = (100, *head_camera_arrays.shape[1:])
+    reward_chunk_size = (100,)  # add reward
     zarr_data.create_dataset('head_camera', data=head_camera_arrays, chunks=head_camera_chunk_size, overwrite=True, compressor=compressor)
     zarr_data.create_dataset('tcp_action', data=action_arrays, chunks=action_chunk_size, dtype='float32', overwrite=True, compressor=compressor)
     zarr_data.create_dataset('state', data=state_arrays, chunks=state_chunk_size, dtype='float32', overwrite=True, compressor=compressor)
     zarr_data.create_dataset('action', data=joint_action_arrays, chunks=joint_chunk_size, dtype='float32', overwrite=True, compressor=compressor)
     zarr_meta.create_dataset('episode_ends', data=episode_ends_arrays, dtype='int64', overwrite=True, compressor=compressor)
+    zarr_meta.create_dataset('reward', data=reward_arrays, chunks=reward_chunk_size, dtype='float32', overwrite=True, compressor=compressor)    # add reward
 
 if __name__ == '__main__':
     main()

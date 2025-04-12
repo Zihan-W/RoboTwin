@@ -170,8 +170,8 @@ class put_apple_cabinet_rl(Base_task):
         _apple_pose = self.apple.get_pose().p
         self.stage_tracker = StageTracker(_cabinet_pos, _apple_pose)
 
-        import wandb
-        self.wandb_run = wandb.init(project="test_put_apple_cabinet_rl", config=kwags)
+        # import wandb
+        # self.wandb_run = wandb.init(project="test_put_apple_cabinet_rl", config=kwags)
 
     def pre_move(self):
         render_freq = self.render_freq
@@ -270,10 +270,10 @@ class put_apple_cabinet_rl(Base_task):
         step_reward, state = self.stage_tracker.update_stage_reward(left_endpose,right_endpose,left_gripper_val,right_gripper_val, apple_pose)
         self.reward += step_reward
         
-        # wandb记录
-        self.wandb_run.log({"reward": self.reward})
-        self.wandb_run.log({"step_reward": step_reward})
-        self.wandb_run.log({"state": state})
+        # # wandb记录
+        # self.wandb_run.log({"reward": self.reward})
+        # self.wandb_run.log({"step_reward": step_reward})
+        # self.wandb_run.log({"state": state})
 
 
         return self.reward
@@ -354,6 +354,7 @@ class put_apple_cabinet_rl(Base_task):
                 "right_camera":{},
                 "front_camera":{}
             },
+            "reward":[],    # reward
             "pointcloud":[],   # conbinet pcd
             "joint_action":[],
             "endpose":[]
@@ -398,6 +399,8 @@ class put_apple_cabinet_rl(Base_task):
             "extrinsic_cv" : right_camera_extrinsic_cv,
             "cam2world_gl" : right_camera_model_matrix
         }
+
+        pkl_dic["reward"] = self.compute_reward()
 
         # # ---------------------------------------------------------------------------- #
         # # RGBA
