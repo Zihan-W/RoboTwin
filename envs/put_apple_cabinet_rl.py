@@ -17,6 +17,10 @@ class StageTracker:
         # Initialize cabinet_pos
         self.cabinet_pos = cabinet_pos
 
+        # Initialize tcp to target distance
+        self.left_endpose_distance = np.zeros(7)
+        self.right_endpose_distance = np.zeros(7)
+
         # Initialize target poses
         self.left_target_pose = list(cabinet_pos + [-0.054, -0.37, -0.09]) + [0.5, 0.5, 0.5, 0.5]
         self.right_target_pose = list(apple_pose + [0, 0, 0.17]) + [-0.5, 0.5, -0.5, -0.5]
@@ -26,67 +30,128 @@ class StageTracker:
         判断当前阶段是否完成，并步进到下一个stage
         一共有0~9共10个状态
         '''
-        left_endpose_distance = np.linalg.norm(np.array(self.left_target_pose[:3]) - np.array(self.left_endpose.p))
-        right_endpose_distance = np.linalg.norm(np.array(self.right_target_pose[:3]) - np.array(self.right_endpose.p))
-        if left_endpose_distance < threshold and right_endpose_distance < threshold:
+        if self.left_endpose_distance < threshold and self.right_endpose_distance < threshold:
             self.stage += 1
             return True
         else:
             return False
 
-    def update_stage(self, left_endpose, right_endpose,left_gripper_val,right_gripper_val):
+    def calculate_approach_reward(self, scale_factor=0.1, time_penalty=0.01): 
+        '''
+        计算接近奖励，引导tcp向目标点接近
+        参数：
+            scale_factor: 距离奖励的缩放系数.
+            time_penalty: 每步的时间惩罚（鼓励效率）.
+        '''       
+
+        # 归一化距离奖励（越近奖励越高）
+        normalized_distance = self.left_endpose_distance + self.right_endpose_distance
+        distance_reward = -scale_factor * normalized_distance  # 负奖励鼓励缩短距离
+
+        reward = distance_reward - time_penalty
+        
+        return reward
+
+    def calculate_grasp_reward(self, apple_pose, right_endpose):
+        # 设置参数
+        threshold = 0.02
+        
+        if np.linalg.norm(apple_pose - right_endpose.p) < threshold:
+            reward = 0.02
+            return reward
+        else:
+            return 0
+
+    def update_stage_reward(self, left_endpose, right_endpose,left_gripper_val,right_gripper_val,apple_pose):
         self.left_endpose = left_endpose
         self.right_endpose = right_endpose
+        self.left_endpose_distance = np.linalg.norm(np.array(self.left_target_pose[:3]) - np.array(self.left_endpose.p))
+        self.right_endpose_distance = np.linalg.norm(np.array(self.right_target_pose[:3]) - np.array(self.right_endpose.p))
+        
+        setp_reward = 0
+        # 一共有9个动作
         if self.stage == 0:
+            # 计算setp_reward，奖励引导机器人向指定点运动
             # 左tcp移动到柜子前，右tcp移动到苹果上方，则认为阶段0结束
-            # 阶段0进入到阶段1，并更新target_pose
+            # 阶段0进入到阶段1，给与阶段奖励，并更新target_pose
+            setp_reward += self.calculate_approach_reward()
             if self.stage_complete(threshold=0.03):
+                setp_reward += self.stage
                 self.left_target_pose[1] += 0.09
                 self.right_target_pose[2] -= 0.05
         elif self.stage == 1:
-            # 左右tcp夹紧，则认为阶段1结束
-            # 阶段1进入到阶段2，并更新target_pose
-            if left_gripper_val <= -0.02 and right_gripper_val <= 0:
+            # 计算setp_reward，奖励引导机器人向指定点运动
+            # 左tcp移动到柜子把手处，右tcp移动到苹果处，则认为阶段1结束
+            # 阶段1进入到阶段2，给与阶段奖励，并更新target_pose
+            setp_reward += self.calculate_approach_reward()
+            if self.stage_complete(threshold=0.03):
+                setp_reward += self.stage
+        elif self.stage == 2:
+            # 计算setp_reward，奖励引导机器人抓住把手和苹果
+            # 左右tcp夹紧，则认为阶段2结束
+            # 阶段2进入到阶段3，给与阶段奖励，并更新target_pose
+            setp_reward += self.calculate_approach_reward()
+            if left_gripper_val <= -0.00 and right_gripper_val <= 0.02:
                 self.stage += 1
+                setp_reward += self.stage
                 self.left_target_pose[1] -= 0.18
                 self.right_target_pose[2] += 0.18
-        elif self.stage == 2:
-            # 左tcp将抽屉拉开，右tcp将苹果举起来，则认为阶段2结束
-            # 这里只判断位置，是否拉开或苹果是否被举起，由reward参与判断
-            # 阶段2进入到阶段3，并更新target_pose
-            if self.stage_complete(threshold=0.03):
-                self.right_target_pose[1] = self.cabinet_pos[1] - 0.216
         elif self.stage == 3:
-            # 右tcp平移到一定位置（向前），则认为阶段3结束
-            # 阶段3进入到阶段4，并更新target_pose
-            print("self.cabinet_pos:", self.cabinet_pos)
-            print("self.right_target_pose:",self.right_target_pose)
+            # 计算setp_reward，奖励引导机器人拉出抽屉和举起苹果
+            # 左tcp将抽屉拉开，右tcp将苹果举起来，则认为阶段3结束
+            # 这里只判断位置，抽屉是否被拉开或苹果是否被举起，由reward参与判断
+            # 阶段3进入到阶段4，给与阶段奖励，并更新target_pose
+            setp_reward += self.calculate_approach_reward()
+            setp_reward += self.calculate_grasp_reward(apple_pose,right_endpose)
             if self.stage_complete(threshold=0.03):
-                self.right_target_pose = list(self.cabinet_pos+[0.036,-0.216,0.078]) + [-0.5,0.5,-0.5,-0.5]
+                setp_reward += self.stage
+                self.right_target_pose[1] = self.cabinet_pos[1] - 0.216
         elif self.stage == 4:
-            # 右tcp平移到一定位置（靠近抽屉），则认为阶段4结束
-            # 阶段4进入到阶段5，并更新target_pose
+            # 计算setp_reward，奖励引导机器人向指定点运动
+            # 右tcp平移到一定位置（向前），则认为阶段4结束
+            # 阶段4进入到阶段5，给与阶段奖励，并更新target_pose
+            setp_reward += self.calculate_approach_reward()
+            setp_reward += self.calculate_grasp_reward(apple_pose,right_endpose)
             if self.stage_complete(threshold=0.03):
-                pass
-        elif self.stage == 5:
-            # 右tcp夹爪打开，则认为阶段5结束
-            # 阶段5进入到阶段6，并更新target_pose（实际上是回到状态4的初始位置，即状态3的末位置）
-            if right_gripper_val >= 0.045:
-                self.stage += 1
+                setp_reward += self.stage
                 self.right_target_pose = list(self.cabinet_pos+[0.036,-0.216,0.078]) + [-0.5,0.5,-0.5,-0.5]
-        elif self.stage == 6:
-            # 右tcp平移到一定位置（远离抽屉），则认为阶段6结束
-            # 阶段6进入到阶段7，并更新target_pose
+        elif self.stage == 5:
+            # 计算setp_reward，奖励引导机器人向指定点运动
+            # 右tcp平移到一定位置（靠近抽屉），则认为阶段5结束
+            # 阶段5进入到阶段6，给与阶段奖励，并更新target_pose
+            setp_reward += self.calculate_approach_reward()
+            setp_reward += self.calculate_grasp_reward(apple_pose,right_endpose)
             if self.stage_complete(threshold=0.03):
+                setp_reward += self.stage
+                pass
+        elif self.stage == 6:
+            # 计算setp_reward，奖励引导机器人将苹果放入抽屉
+            # 右tcp夹爪打开，则认为阶段6结束
+            # 阶段6进入到阶段7，给与阶段奖励，并更新target_pose（实际上是回到状态5的初始位置，即状态4的末位置）
+            setp_reward += self.calculate_approach_reward()
+            if right_gripper_val >= 0.043:
+                self.stage += 1
+                setp_reward += self.stage
+                self.right_target_pose = list(self.cabinet_pos+[0.036,-0.216,0.078]) + [-0.5,0.5,-0.5,-0.5]
+        elif self.stage == 7:
+            # 计算setp_reward，奖励引导机器人向指定点运动
+            # 右tcp平移到一定位置（远离抽屉），则认为阶段6结束
+            # 阶段6进入到阶段7，给与阶段奖励，并更新target_pose
+            setp_reward += self.calculate_approach_reward()
+            if self.stage_complete(threshold=0.03):
+                setp_reward += self.stage
                 self.left_target_pose[1] += 0.18
                 self.right_target_pose = [0.3,-0.32,0.935,1,0,0,1]  # right_original_pose
 
-        elif self.stage == 7:
-            # 左tcp平移到一定为止，右tcp回到初始位置，则认为阶段7结束
+        elif self.stage == 8:
+            # 计算setp_reward，奖励引导机器人向指定点运动
+            # 左tcp平移到一定为止，给与阶段奖励，右tcp回到初始位置，则认为阶段7结束
+            setp_reward += self.calculate_approach_reward()
             if self.stage_complete(threshold=0.03):
+                setp_reward += self.stage
                 pass
 
-        return self.stage
+        return setp_reward, self.stage
 
 class put_apple_cabinet_rl(Base_task):
     def setup_demo(self,**kwags):
@@ -98,9 +163,15 @@ class put_apple_cabinet_rl(Base_task):
         self.pre_move()
         self.load_actors()
         self.step_lim = 600
+
+        self.reward = 0
+
         _cabinet_pos = self.cabinet.get_pose().p
         _apple_pose = self.apple.get_pose().p
         self.stage_tracker = StageTracker(_cabinet_pos, _apple_pose)
+
+        import wandb
+        self.wandb_run = wandb.init(project="test_put_apple_cabinet_rl", config=kwags)
 
     def pre_move(self):
         render_freq = self.render_freq
@@ -149,7 +220,7 @@ class put_apple_cabinet_rl(Base_task):
         # ├─ meta [Group]
         #   ├─ episode_ends [Array] (20,) int64
         # 该数据集训练的是下一步机器人应该到哪个pos，TODO：或许可以改为增量输出，则数据集中应该有基于当前state采取的action数据
-        # TODO: 增加并设计compute_reward函数，以计算reward
+        # 增加并设计compute_reward函数，以计算reward
         # TODO: 修改_take_picture函数，以保存part_poses(包括cabinet和apple的pose)、reward（调用compute_reward函数计算）、dones（每个step都记录）
         # TODO: 修改script/pkl2zarr_rl.py，以使转换后的数据集含有reward和dones数据
         pose0 = list(self.cabinet.get_pose().p+[-0.054,-0.37,-0.09])+[0.5,0.5,0.5,0.5]
@@ -195,114 +266,17 @@ class put_apple_cabinet_rl(Base_task):
         right_endpose = self.get_right_endpose_pose()
         left_gripper_val = self.left_gripper_val
         right_gripper_val = self.right_gripper_val
-
         # 更新self.state
-        state = self.stage_tracker.update_stage(left_endpose,right_endpose,left_gripper_val,right_gripper_val)
-        print("current_state:",state)
-
-        # 通过任务阶段标志动态控制奖励项的激活，引导agent按顺序学习
-        if state == 0:
-            # Initial approach to cabinet
-            target_pose = (cabinet_pos + np.array([-0.054,-0.37,-0.09])).tolist() + [0.5,0.5,0.5,0.5]
-            dist = np.linalg.norm(np.array(left_endpose.p.tolist()) - np.array(target_pose[:3]))
-            reward_dist = -dist
-            
-        elif state == 1:
-            # Grasping cabinet handle
-            target_pose = (cabinet_pos + np.array([-0.054,-0.28,-0.09])).tolist() + [0.5,0.5,0.5,0.5]
-            dist = np.linalg.norm(np.array(left_endpose.p.tolist()) - np.array(target_pose[:3]))
-            reward_dist = -dist
-            if dist < 0.02:
-                reward_bonus = 1.0
-
-        elif state == 2:
-            # Opening cabinet
-            target_pose = (cabinet_pos + np.array([-0.054,-0.1,-0.09])).tolist() + [0.5,0.5,0.5,0.5]
-            dist = np.linalg.norm(np.array(left_endpose.p.tolist()) - np.array(target_pose[:3]))
-            reward_dist = -dist
-
-        elif state == 3:
-            # Approaching apple
-            target_pose = (apple_pose + np.array([0,0,0.17])).tolist() + [-0.5,0.5,-0.5,-0.5]
-            dist = np.linalg.norm(np.array(right_endpose.p.tolist()) - np.array(target_pose[:3]))
-            reward_dist = -dist
-
-        elif state == 4:
-            # Grasping apple
-            target_pose = (apple_pose + np.array([0,0,0.12])).tolist() + [-0.5,0.5,-0.5,-0.5]
-            dist = np.linalg.norm(np.array(right_endpose.p.tolist()) - np.array(target_pose[:3]))
-            reward_dist = -dist
-            if dist < 0.02:
-                reward_bonus = 1.0
-
-        elif state == 5:
-            # Lifting apple
-            target_pose = (apple_pose + np.array([0,0,0.3])).tolist() + [-0.5,0.5,-0.5,-0.5]
-            dist = np.linalg.norm(np.array(right_endpose.p.tolist()) - np.array(target_pose[:3]))
-            reward_dist = -dist
-
-        elif state == 6:
-            # Moving apple to cabinet
-            target_pose = (cabinet_pos + np.array([0.036,-0.216,0.078])).tolist() + [-0.5,0.5,-0.5,-0.5]
-            dist = np.linalg.norm(np.array(right_endpose.p.tolist()) - np.array(target_pose[:3]))
-            reward_dist = -dist
-            if dist < 0.02:
-                reward_bonus = 1.0
-
-        elif state == 7:
-            # Return to home position
-            target_pose = self.right_original_pose
-            dist = np.linalg.norm(np.array(right_endpose.p.tolist()) - np.array(target_pose[:3]))
-            reward_dist = -dist
-            if dist < 0.02:
-                reward_bonus = 1.0
+        step_reward, state = self.stage_tracker.update_stage_reward(left_endpose,right_endpose,left_gripper_val,right_gripper_val, apple_pose)
+        self.reward += step_reward
         
-        elif state == 8:
-            # Return to home position
-            target_pose = self.right_original_pose
-            dist = np.linalg.norm(np.array(right_endpose.p.tolist()) - np.array(target_pose[:3]))
-            reward_dist = -dist
-            if dist < 0.02:
-                reward_bonus = 1.0
-        
-        elif state == 9:
-            # Return to home position
-            target_pose = self.right_original_pose
-            dist = np.linalg.norm(np.array(right_endpose.p.tolist()) - np.array(target_pose[:3]))
-            reward_dist = -dist
-            if dist < 0.02:
-                reward_bonus = 1.0
+        # wandb记录
+        self.wandb_run.log({"reward": self.reward})
+        self.wandb_run.log({"step_reward": step_reward})
+        self.wandb_run.log({"state": state})
 
-        elif state == 10:
-            # Return to home position
-            target_pose = self.right_original_pose
-            dist = np.linalg.norm(np.array(right_endpose.p.tolist()) - np.array(target_pose[:3]))
-            reward_dist = -dist
-            if dist < 0.02:
-                reward_bonus = 1.0
 
-        # Combine rewards
-        # reward = alpha_dist * reward_dist + alpha_dir * reward_dir + alpha_align * reward_align \
-        #       + alpha_bonus * reward_bonus + alpha_penalty * reward_penalty
-
-        # # 参数
-        # alpha_dist = 1
-        # alpha_dir = 1
-        # alpha_align = 1
-        # alpha_bonus = 1
-        # alpha_penalty = 1
-
-        # # reward计算
-        # reward_dist = 1
-        # reward_dir = 1
-        # reward_align = 1
-        # reward_bonus = 1
-        # reward_penalty = 1
-
-        # reward = alpha_dist * reward_dist + alpha_dir * reward_dir + alpha_align * reward_align \
-        #       + alpha_bonus * reward_bonus + alpha_penalty * reward_penalty
-        
-        # return reward
+        return self.reward
 
     def _take_picture(self): # Save data
         '''
