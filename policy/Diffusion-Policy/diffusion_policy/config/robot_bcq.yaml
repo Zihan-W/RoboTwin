@@ -2,10 +2,10 @@ defaults:
   - _self_
   - task: default_rl_task
 
-name: ppo_robot_${task.name}
-_target_: diffusion_policy.workspace.robotworkspace.MLPAgentRobotWorkspace
+name: robot_${task.name}
+_target_: diffusion_policy.workspace.robotworkspace.BCQRobotWorkspace
 
-task_name: ppo_${task.name}
+task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: "default"
 
@@ -19,12 +19,16 @@ keypoint_visible_rate: 1.0
 obs_as_global_cond: True
 
 policy:
-  _target_: diffusion_policy.policy.mlp_agent.MultiStepTD3Agent
+  _target_: diffusion_policy.policy.bcq_policy.BCQ
 
   shape_meta: ${shape_meta}
   
-  lr_critic: 0.01
-  lr_actor: 0.01
+  lr_critic: 1e-3
+  lr_actor: 1e-3
+  discount: 0.99
+  tau: 0.005
+  lmbda: 0.75
+  phi: 0.05
 
   noise_scheduler:
     _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
@@ -76,14 +80,14 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 16
+  batch_size: 32
   num_workers: 0
   shuffle: True
   pin_memory: True
   persistent_workers: False
 
 val_dataloader:
-  batch_size: 16
+  batch_size: 32
   num_workers: 0
   shuffle: False
   pin_memory: True

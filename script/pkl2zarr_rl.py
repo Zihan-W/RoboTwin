@@ -99,7 +99,7 @@ def main():
     zarr_data.create_dataset('state', data=state_arrays, chunks=state_chunk_size, dtype='float32', overwrite=True, compressor=compressor)
     zarr_data.create_dataset('action', data=joint_action_arrays, chunks=joint_chunk_size, dtype='float32', overwrite=True, compressor=compressor)
     zarr_meta.create_dataset('episode_ends', data=episode_ends_arrays, dtype='int64', overwrite=True, compressor=compressor)
-    zarr_meta.create_dataset('reward', data=reward_arrays, chunks=reward_chunk_size, dtype='float32', overwrite=True, compressor=compressor)    # add reward
+    zarr_data.create_dataset('reward', data=reward_arrays, chunks=reward_chunk_size, dtype='float32', overwrite=True, compressor=compressor)    # add reward
     zarr_data.create_dataset('apple_pose', data=apple_pose_arrays, chunks=apple_pose_chunk_size, dtype='float32', overwrite=True, compressor=compressor)  # 存储apple_pose
     zarr_data.create_dataset('cabinet_pose', data=cabinet_pose_arrays, chunks=cabinet_pose_chunk_size, dtype='float32', overwrite=True, compressor=compressor)  # 存储cabinet_pose
     
