@@ -1003,7 +1003,7 @@ class BCQRobotWorkspace(BaseWorkspace):
                         # sample trajectory from training set, and evaluate difference
                         batch = train_sampling_batch
                         obs_dict = batch['obs']
-                        gt_action = batch['tcp_action'] # torch.Size([32, 4, 14]) batch_size, horizon, action_dim
+                        gt_action = batch['action'] # torch.Size([32, 4, 14]) batch_size, horizon, action_dim
                         result = policy.predict_action(obs_dict)
                         pred_action = result # torch.Size([32, 3, 14])
                         mse = torch.nn.functional.mse_loss(pred_action, gt_action)

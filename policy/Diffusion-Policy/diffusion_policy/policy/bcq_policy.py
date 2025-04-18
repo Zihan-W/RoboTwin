@@ -136,7 +136,7 @@ class BCQ(nn.Module):
 		self.n_action_steps = n_action_steps
 		self.action_seq_dim = self.action_dim * n_action_steps  # 多步动作序列维度
 
-		self.max_action = torch.zeros(self.action_seq_dim).to(device)	# TODO：替换为实际动作的上限值
+		self.max_action = torch.full((self.action_seq_dim,), 2.7).to(device)  # 设置动作上限值为2.7
 
 		self.obs_encoder = obs_encoder
 		self.obs_feature_dim = obs_encoder.output_shape()[0]
@@ -191,7 +191,7 @@ class BCQ(nn.Module):
 				nobs_features = nobs_features.view(batch_size, -1)  # 转换为 [batch_size, n_obs_steps * obs_feature_dim]
 				next_nobs_features = next_nobs_features.view(batch_size, -1)  # 转换为 [batch_size, n_obs_steps * obs_feature_dim]
 
-			nactions = self.normalizer['tcp_action'].normalize(batch['tcp_action']) # 正则化, [batch_size, horzion, action_dim]
+			nactions = self.normalizer['action'].normalize(batch['action']) # 正则化, [batch_size, horzion, action_dim]
 			nactions = nactions[:, :self.n_action_steps, :]  # [batch_size, n_steps, action_dim]
 			nactions_flat = nactions.view(batch_size, -1)  # [batch_size, n_steps*action_dim]
 			nrewards = batch['reward'].sum(dim=1)	# [batch_size, horizon] -> [batch_size]
@@ -284,7 +284,7 @@ class BCQ(nn.Module):
 			nobs_features = self.obs_encoder(this_nobs).view(batch_size, -1)
 			next_nobs_features = self.obs_encoder(next_this_nobs).view(batch_size, -1)
 			
-			nactions = self.normalizer['tcp_action'].normalize(batch['tcp_action'])
+			nactions = self.normalizer['action'].normalize(batch['action'])
 			nactions = nactions[:, :self.n_action_steps, :]
 			nactions_flat = nactions.view(batch_size, -1)
 			nrewards = batch['reward'].sum(dim=1)
@@ -368,6 +368,6 @@ class BCQ(nn.Module):
 			action_seq = perturbed_actions.squeeze(0).cpu().numpy()  # [n_action_steps, action_dim]
 			
 			# 反归一化（如果训练时做了动作归一化）
-			denorm_action = self.normalizer['tcp_action'].unnormalize(action_seq)
+			denorm_action = self.normalizer['action'].unnormalize(action_seq)
 			
 		return denorm_action

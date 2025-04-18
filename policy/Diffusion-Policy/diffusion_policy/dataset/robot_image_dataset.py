@@ -158,7 +158,7 @@ class RLRobotImageDataset(BaseImageDataset):
         self.replay_buffer = ReplayBuffer.copy_from_path(
             zarr_path,
             # keys=['head_camera', 'front_camera', 'left_camera', 'right_camera', 'state', 'action'],
-            keys=['head_camera', 'state', 'tcp_action', 'apple_pose', 
+            keys=['head_camera', 'state', 'action', 'apple_pose', 
                   'cabinet_pose', 'reward', 'done', 'next_head_camera', 'next_state']
         )
             
@@ -207,7 +207,7 @@ class RLRobotImageDataset(BaseImageDataset):
 
     def get_normalizer(self, mode='limits', **kwargs):
         data = {
-            'tcp_action': self.replay_buffer['tcp_action'],
+            'action': self.replay_buffer['action'],
             'agent_pos': self.replay_buffer['state'],
             'next_agent_pos': self.replay_buffer['next_state'],
         }
@@ -244,7 +244,7 @@ class RLRobotImageDataset(BaseImageDataset):
                 'head_cam': next_head_cam, # T, 3, H, W
                 'agent_pos': next_agent_pos, # T, D
             },
-            'tcp_action': sample['tcp_action'].astype(np.float32), # T, D
+            'action': sample['action'].astype(np.float32), # T, D
             'apple_pose': sample['apple_pose'].astype(np.float32),  # T, D
             'cabinet_pose':sample['cabinet_pose'].astype(np.float32),  # T, D
             'reward':sample['reward'].astype(np.float32),  # T, D
@@ -275,7 +275,7 @@ class RLRobotImageDataset(BaseImageDataset):
         # front_cam = samples['front_camera'].to(device, non_blocking=True) / 255.0
         # left_cam = samples['left_camera'].to(device, non_blocking=True) / 255.0
         # right_cam = samples['right_camera'].to(device, non_blocking=True) / 255.0
-        tcp_action = samples['tcp_action'].to(device, non_blocking=True)
+        action = samples['action'].to(device, non_blocking=True)
         apple_pose = samples['apple_pose'].to(device, non_blocking=True)
         cabinet_pose = samples['cabinet_pose'].to(device, non_blocking=True)
         reward = samples['reward'].to(device, non_blocking=True)
@@ -292,7 +292,7 @@ class RLRobotImageDataset(BaseImageDataset):
                 'head_cam': next_head_cam, # T, 3, H, W
                 'agent_pos': next_agent_pos, # T, D
             },
-            'tcp_action': tcp_action, # B, T, D
+            'action': action, # B, T, D
             'apple_pose': apple_pose,
             'cabinet_pose': cabinet_pose,
             'reward': reward,
