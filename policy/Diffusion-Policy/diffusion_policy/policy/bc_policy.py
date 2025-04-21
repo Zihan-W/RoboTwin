@@ -77,6 +77,17 @@ class BehaviorCloningPolicy(nn.Module):
         '''
         Input shape: batch_size, horzion, channels, H, W
         '''
+
+        def safe_normalize(normalizer, data):
+            result = {}
+            for key, value in data.items():
+                if key in normalizer.params_dict:
+                    result[key] = normalizer[key].normalize(value)
+                else:
+                    result[key] = value  # 原样返回
+            return result
+
+        # nobs = safe_normalize(self.normalizer, obs_dict)
         nobs = self.normalizer.normalize(obs_dict)
         value = next(iter(nobs.values()))
         B, To = value.shape[:2]
@@ -84,7 +95,6 @@ class BehaviorCloningPolicy(nn.Module):
         Da = self.action_dim
         Do = self.obs_feature_dim
         To = self.n_obs_steps
-
         this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
         nobs_features = self.obs_encoder(this_nobs) # batch_size * n_obs_steps, obs_feature_dim
         

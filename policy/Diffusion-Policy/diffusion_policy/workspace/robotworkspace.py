@@ -23,6 +23,7 @@ from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.policy.bc_policy import BehaviorCloningPolicy
 from diffusion_policy.policy.mlp_agent import MultiStepTD3Agent
 from diffusion_policy.policy.bcq_policy import BCQ
+from diffusion_policy.policy.bc_bcq_policy import BC_BCQ
 from diffusion_policy.policy.diffusion_unet_image_policy import DiffusionUnetImagePolicy
 from diffusion_policy.dataset.base_dataset import BaseImageDataset
 from diffusion_policy.common.checkpoint_util import TopKCheckpointManager
@@ -360,17 +361,17 @@ class BCRobotWorkspace(BaseWorkspace):
         # assert isinstance(env_runner, BaseImageRunner)
         env_runner = None
 
-        # configure logging
-        wandb_run = wandb.init(
-            dir=str(self.output_dir),
-            config=OmegaConf.to_container(cfg, resolve=True),
-            **cfg.logging
-        )
-        wandb.config.update(
-            {
-                "output_dir": self.output_dir,
-            }
-        )
+        # # configure logging
+        # wandb_run = wandb.init(
+        #     dir=str(self.output_dir),
+        #     config=OmegaConf.to_container(cfg, resolve=True),
+        #     **cfg.logging
+        # )
+        # wandb.config.update(
+        #     {
+        #         "output_dir": self.output_dir,
+        #     }
+        # )
 
         # configure checkpoint
         topk_manager = TopKCheckpointManager(
@@ -523,14 +524,14 @@ class BCRobotWorkspace(BaseWorkspace):
                 current_time = time.time()
                 step_log['total_elapsed_time'] = current_time - training_start_time
                 json_logger.log(step_log)
-                if wandb_run is not None:  # 确保wandb已初始化
-                    wandb.log(step_log)    # 新增这行
+                # if wandb_run is not None:  # 确保wandb已初始化
+                #     wandb.log(step_log)    # 新增这行
                 self.global_step += 1
                 self.epoch += 1
             total_time = time.time() - training_start_time
-            if wandb_run is not None:
-                wandb.log({'final_total_time': total_time})
-                wandb.finish()
+            # if wandb_run is not None:
+            #     wandb.log({'final_total_time': total_time})
+            #     wandb.finish()
 
 class MLPAgentRobotWorkspace(BaseWorkspace):    # TODO: 暂时不能正常运行
     include_keys = ['global_step', 'epoch']
@@ -994,6 +995,248 @@ class BCQRobotWorkspace(BaseWorkspace):
                             val_critic_loss = torch.mean(torch.tensor(val_critic_losses)).item()
                             val_actor_loss = torch.mean(torch.tensor(val_actor_losses)).item()
                             # log epoch average validation loss
+                            step_log['val_critic_loss'] = val_critic_loss
+                            step_log['val_actor_loss'] = val_actor_loss
+
+                # run diffusion sampling on a training batch
+                if (self.epoch % cfg.training.sample_every) == 0:
+                    with torch.no_grad():
+                        # sample trajectory from training set, and evaluate difference
+                        batch = train_sampling_batch
+                        obs_dict = batch['obs']
+                        gt_action = batch['action'] # torch.Size([32, 4, 14]) batch_size, horizon, action_dim
+                        result = policy.predict_action(obs_dict)
+                        pred_action = result # torch.Size([32, 3, 14])
+                        mse = torch.nn.functional.mse_loss(pred_action, gt_action)
+                        step_log['train_action_mse_error'] = mse.item()
+                        del batch
+                        del obs_dict
+                        del gt_action
+                        del result
+                        del pred_action
+                        del mse
+                
+                # checkpoint
+                if ((self.epoch + 1) % cfg.training.checkpoint_every) == 0:
+                    # checkpointing
+                    save_name = pathlib.Path(self.cfg.task.dataset.zarr_path).stem + '_bcq'
+                    self.save_checkpoint(f'checkpoints/{save_name}_{seed}/{self.epoch + 1}.ckpt') # TODO
+                    # logging time
+                    current_time = time.time()
+                    checkpoint_interval = current_time - last_checkpoint_time
+                    last_checkpoint_time = current_time
+                    step_log['checkpoint_interval'] = checkpoint_interval
+                # ========= eval end for this epoch ==========
+                policy.train()  # TODO：不知道eval是否必须，如果不是必须，则不用了
+
+                # end of epoch
+                # log of last step is combined with validation and rollout
+                current_time = time.time()
+                step_log['total_elapsed_time'] = current_time - training_start_time
+                json_logger.log(step_log)
+                if wandb_run is not None:  # 确保wandb已初始化
+                    wandb.log(step_log)    # 新增这行
+                self.global_step += 1
+                self.epoch += 1
+            total_time = time.time() - training_start_time
+            if wandb_run is not None:
+                wandb.log({'final_total_time': total_time})
+                wandb.finish()
+
+class BC_BCQRobotWorkspace(BaseWorkspace):
+    include_keys = ['global_step', 'epoch']
+
+    def __init__(self, cfg: OmegaConf, output_dir=None):
+        super().__init__(cfg, output_dir=output_dir)
+
+        # set seed
+        seed = cfg.training.seed
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        random.seed(seed)
+
+        # configure model
+        self.model: BC_BCQ = hydra.utils.instantiate(cfg.policy)
+
+        self.ema_model: BC_BCQ = None
+        if cfg.training.use_ema:
+            self.ema_model = copy.deepcopy(self.model)
+
+        # configure training state
+        self.global_step = 0
+        self.epoch = 0
+
+
+    def run(self):
+        # 将模型的训练转移到bcq_policy代码中，删除了optimizer和lr_scheduler
+        # TODO:修改bcq的输入和输出维度
+        training_start_time = time.time()   # 模型训练时间计时器
+        last_checkpoint_time = time.time()  # checkpoint计时器
+        cfg = copy.deepcopy(self.cfg)
+        seed = cfg.training.seed
+        head_camera_type = cfg.head_camera_type
+
+        # resume training
+        if cfg.training.resume:
+            lastest_ckpt_path = self.get_checkpoint_path()
+            if lastest_ckpt_path.is_file():
+                print(f"Resuming from checkpoint {lastest_ckpt_path}")
+                self.load_checkpoint(path=lastest_ckpt_path)
+
+        # configure dataset
+        dataset: BaseImageDataset
+        dataset = hydra.utils.instantiate(cfg.task.dataset)
+        assert isinstance(dataset, BaseImageDataset)
+        train_dataloader = create_dataloader(dataset, **cfg.dataloader)
+        normalizer = dataset.get_normalizer()
+
+        # configure validation dataset
+        val_dataset = dataset.get_validation_dataset()
+        val_dataloader = create_dataloader(val_dataset, **cfg.val_dataloader)
+
+        self.model.set_normalizer(normalizer)
+        if cfg.training.use_ema:
+            self.ema_model.set_normalizer(normalizer)
+
+        # configure ema
+        ema: EMAModel = None
+        if cfg.training.use_ema:
+            ema = hydra.utils.instantiate(
+                cfg.ema,
+                model=self.ema_model)
+
+        # configure env
+        # env_runner: BaseImageRunner
+        # env_runner = hydra.utils.instantiate(
+        #     cfg.task.env_runner,
+        #     output_dir=self.output_dir)
+        # assert isinstance(env_runner, BaseImageRunner)
+        env_runner = None
+
+        # configure logging
+        wandb_run = wandb.init(
+            dir=str(self.output_dir),
+            config=OmegaConf.to_container(cfg, resolve=True),
+            **cfg.logging
+        )
+        wandb.config.update(
+            {
+                "output_dir": self.output_dir,
+            }
+        )
+
+        # configure checkpoint
+        topk_manager = TopKCheckpointManager(
+            save_dir=os.path.join(self.output_dir, 'checkpoints'),
+            **cfg.checkpoint.topk
+        )
+
+        # device transfer
+        device = torch.device(cfg.training.device)
+        self.model.to(device)
+        if self.ema_model is not None:
+            self.ema_model.to(device)
+
+        # save batch for sampling
+        train_sampling_batch = None
+
+        if cfg.training.debug:
+            cfg.training.num_epochs = 2
+            cfg.training.max_train_steps = 3
+            cfg.training.max_val_steps = 3
+            cfg.training.rollout_every = 1
+            cfg.training.checkpoint_every = 1
+            cfg.training.val_every = 1
+            cfg.training.sample_every = 1
+
+        # training loop
+        log_path = os.path.join(self.output_dir, 'logs.json.txt')
+        
+        with JsonLogger(log_path) as json_logger:
+            for local_epoch_idx in range(cfg.training.num_epochs):
+                step_log = dict()
+                # ========= train for this epoch ==========
+                if cfg.training.freeze_encoder:
+                    self.model.obs_encoder.eval()
+                    self.model.obs_encoder.requires_grad_(False)
+
+                actor_losses = list()
+                critic_losses = list()
+                with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
+                        leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
+                    for batch_idx, batch in enumerate(tepoch):
+                        batch = dataset.postprocess(batch, device)
+                        if train_sampling_batch is None:
+                            train_sampling_batch = batch
+                        raw_critic_loss, raw_actor_loss = self.model.update(batch)
+                        
+                        # update ema
+                        if cfg.training.use_ema:
+                            ema.step(self.model)
+
+                        # logging
+                        tepoch.set_postfix(loss=raw_actor_loss, refresh=False)
+                        critic_losses.append(raw_critic_loss)
+                        actor_losses.append(raw_actor_loss)
+                        step_log = {
+                            'critic_loss': raw_critic_loss,
+                            'actor_loss': raw_actor_loss,
+                            'global_step': self.global_step,
+                            'epoch': self.epoch,
+                        }
+
+                        is_last_batch = (batch_idx == (len(train_dataloader)-1))
+                        if not is_last_batch:
+                            # log of last step is combined with validation and rollout
+                            json_logger.log(step_log)
+                            self.global_step += 1
+
+                        if (cfg.training.max_train_steps is not None) \
+                            and batch_idx >= (cfg.training.max_train_steps-1):
+                            break
+
+                # at the end of each epoch
+                # replace train_loss with epoch average
+                critic_loss = np.mean(critic_losses)
+                actor_loss = np.mean(actor_losses)
+                step_log['critic_loss'] = critic_loss
+                step_log['actor_loss'] = actor_loss
+
+                # ========= eval for this epoch ==========
+                policy = self.model
+                if cfg.training.use_ema:
+                    policy = self.ema_model
+                policy.eval() # TODO：不知道eval是否必须，如果不是必须，则不用了
+
+                # run rollout
+                # if (self.epoch % cfg.training.rollout_every) == 0:
+                #     runner_log = env_runner.run(policy)
+                #     # log all
+                #     step_log.update(runner_log)
+
+                # run validation
+                if (self.epoch % cfg.training.val_every) == 0:
+                    with torch.no_grad():
+                        val_vae_losses = list()
+                        val_critic_losses = list()
+                        val_actor_losses = list()
+                        with tqdm.tqdm(val_dataloader, desc=f"Validation epoch {self.epoch}", 
+                                leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
+                            for batch_idx, batch in enumerate(tepoch):
+                                batch = dataset.postprocess(batch, device)
+                                val_vae_loss, val_critic_loss, val_actor_loss = self.model.evaluate(batch)
+                                val_vae_losses.append(val_vae_loss)
+                                val_critic_losses.append(val_critic_loss)
+                                val_actor_losses.append(val_actor_loss)
+                                if (cfg.training.max_val_steps is not None) \
+                                    and batch_idx >= (cfg.training.max_val_steps-1):
+                                    break
+                        if len(val_vae_losses) > 0 and len(val_critic_losses) > 0 and len(val_actor_losses) > 0:
+                            val_vae_loss = torch.mean(torch.tensor(val_critic_losses)).item()
+                            val_critic_loss = torch.mean(torch.tensor(val_critic_losses)).item()
+                            val_actor_loss = torch.mean(torch.tensor(val_actor_losses)).item()
+                            # log epoch average validation loss
+                            step_log['val_vae_loss'] = val_vae_loss
                             step_log['val_critic_loss'] = val_critic_loss
                             step_log['val_actor_loss'] = val_actor_loss
 

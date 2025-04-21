@@ -84,11 +84,13 @@ class BCRunner:
         if observaton is not None:
             self.obs.append(observaton) # update
         obs = self.get_n_steps_obs()
-
-        # create obs dict
-        np_obs_dict = dict(obs)
-        # device transfer
-        obs_dict = dict_apply(np_obs_dict, lambda x: torch.from_numpy(x).to(device='cuda:0'))
+        # check if obs is already tensor
+        if isinstance(list(obs.values())[0], torch.Tensor):
+            obs_dict = obs
+        else:
+            # create obs dict and transfer to gpu
+            np_obs_dict = dict(obs)
+            obs_dict = dict_apply(np_obs_dict, lambda x: torch.from_numpy(x).to(device='cuda:0'))
         # run policy
         with torch.no_grad():
             obs_dict_input = {}  # flush unused keys
@@ -97,9 +99,8 @@ class BCRunner:
             obs_dict_input['left_cam'] = obs_dict['left_cam'].unsqueeze(0)
             obs_dict_input['right_cam'] = obs_dict['right_cam'].unsqueeze(0)
             obs_dict_input['agent_pos'] = obs_dict['agent_pos'].unsqueeze(0)
-            
             action_dict = policy.predict_action(obs_dict_input)
-
+            
         # device_transfer
         np_action_dict = dict_apply(action_dict, lambda x: x.detach().to('cpu').numpy())
         action = np_action_dict['action'].squeeze(0)
