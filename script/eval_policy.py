@@ -16,21 +16,62 @@ from datetime import datetime
 import importlib
 import dill
 from argparse import ArgumentParser
+from diffusion_policy.workspace.robotworkspace import BCRobotWorkspace
+from diffusion_policy.workspace.robotworkspace import BCQRobotWorkspace
+
 from diffusion_policy.env_runner.bc_runner import BCRunner
 from diffusion_policy.env_runner.bcq_runner import BCQRunner
-from diffusion_policy.workspace.robotworkspace import BCRobotWorkspace
 
 current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
+project_directory = os.path.dirname(parent_directory)
 
-def get_policy(checkpoint, output_dir, device=0):
+class BC:
+    def __init__(self, task_name, head_camera_type: str, checkpoint_num: int, expert_data_num: int, seed: int):
+        self.policy = get_policy(f'checkpoints/{task_name}_{head_camera_type}_{expert_data_num}_bc_{seed}/{checkpoint_num}.ckpt', None, 'cuda:0', name='bc')
+        self.runner = BCRunner(output_dir=None)
+
+    def update_obs(self, observation):
+        self.runner.update_obs(observation)
     
+    def get_action(self, observation=None):
+        action = self.runner.get_action(self.policy, observation)
+        return action
+
+    def get_action_as_base(self, observation=None):
+        # torch.Size([32, 8, 3, 240, 320])
+        action = self.policy.predict_action(observation)
+        action = action['action_pred']
+        return action
+
+    def get_last_obs(self):
+        return self.runner.obs[-1]
+    
+class BCQ:
+    def __init__(self, task_name, head_camera_type: str, checkpoint_num: int, expert_data_num: int, seed: int):
+        self.policy = get_policy(f'checkpoints/{task_name}_{head_camera_type}_{expert_data_num}_bcq_{seed}/{checkpoint_num}.ckpt', None, 'cuda:0', name='bcq')
+        self.runner = BCQRunner(output_dir=None)
+
+    def update_obs(self, observation):
+        self.runner.update_obs(observation)
+    
+    def get_action(self, observation=None):
+        action = self.runner.get_action(self.policy, observation)
+        return action
+
+    def get_last_obs(self):
+        return self.runner.obs[-1]
+
+def get_policy(checkpoint, output_dir, device, name):
     # load checkpoint
-    payload = torch.load(open('./policy/Diffusion-Policy/' + checkpoint, 'rb'), pickle_module=dill)
+    payload = torch.load(open(f'{project_directory}/policy/Diffusion-Policy/' + checkpoint, 'rb'), pickle_module=dill)
     cfg = payload['cfg']
     cls = hydra.utils.get_class(cfg._target_)
     workspace = cls(cfg, output_dir=output_dir)
-    workspace: BCRobotWorkspace
+    if name == 'bc':
+        workspace: BCRobotWorkspace
+    elif name == 'bcq':
+        workspace: BCQRobotWorkspace
     workspace.load_payload(payload, exclude_keys=None, include_keys=None)
     
     # get policy from workspace
@@ -52,36 +93,6 @@ def class_decorator(task_name):
     except:
         raise SystemExit("No Task")
     return env_instance
-
-class BC:
-    def __init__(self, task_name, head_camera_type: str, checkpoint_num: int, expert_data_num: int, seed: int):
-        self.policy = get_policy(f'checkpoints/{task_name}_{head_camera_type}_{expert_data_num}_bc_{seed}/{checkpoint_num}.ckpt', None, 'cuda:0')
-        self.runner = BCRunner(output_dir=None)
-
-    def update_obs(self, observation):
-        self.runner.update_obs(observation)
-    
-    def get_action(self, observation=None):
-        action = self.runner.get_action(self.policy, observation)
-        return action
-
-    def get_last_obs(self):
-        return self.runner.obs[-1]
-    
-class BCQ:
-    def __init__(self, task_name, head_camera_type: str, checkpoint_num: int, expert_data_num: int, seed: int):
-        self.policy = get_policy(f'checkpoints/{task_name}_{head_camera_type}_{expert_data_num}_bcq_{seed}/{checkpoint_num}.ckpt', None, 'cuda:0')
-        self.runner = BCQRunner(output_dir=None)
-
-    def update_obs(self, observation):
-        self.runner.update_obs(observation)
-    
-    def get_action(self, observation=None):
-        action = self.runner.get_action(self.policy, observation)
-        return action
-
-    def get_last_obs(self):
-        return self.runner.obs[-1]
 
 def get_camera_config(camera_type):
     camera_config_path = os.path.join(parent_directory, '../task_config/_camera_config.yml')
@@ -235,7 +246,7 @@ def test_policy(task_name, Demo_class, args, policy, st_seed, test_num=20):
     return now_seed, Demo_class.suc
 
 if __name__ == "__main__":
-    from test_render import Sapien_TEST
+    from script.test_render import Sapien_TEST
     Sapien_TEST()
     
     parser = ArgumentParser()
