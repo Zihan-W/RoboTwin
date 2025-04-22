@@ -1261,7 +1261,7 @@ class BC_BCQRobotWorkspace(BaseWorkspace):
                 # checkpoint
                 if ((self.epoch + 1) % cfg.training.checkpoint_every) == 0:
                     # checkpointing
-                    save_name = pathlib.Path(self.cfg.task.dataset.zarr_path).stem + '_bcq'
+                    save_name = pathlib.Path(self.cfg.task.dataset.zarr_path).stem + '_bc_bcq'
                     self.save_checkpoint(f'checkpoints/{save_name}_{seed}/{self.epoch + 1}.ckpt') # TODO
                     # logging time
                     current_time = time.time()

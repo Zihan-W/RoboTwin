@@ -135,12 +135,14 @@ class BC_BCQ(nn.Module):
 			  lmbda=0.75,
 			  lr_critic=1e-3,
 			  lr_actor=1e-3,
-			  phi=0.05,
+			  phi=0.01,
 			  obs_encoder: MultiImageObsEncoder = None,
 			  **kwargs):
 		super(BC_BCQ, self).__init__()
 
 		self.device = torch.device("cuda:0")
+		self.phi = phi	# 扰动幅度
+		self.tau = tau
 
 		action_shape = shape_meta['action']['shape']
 		self.action_dim = action_shape[0]
@@ -162,7 +164,7 @@ class BC_BCQ(nn.Module):
 		self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=lr_critic)
 
 		# Initialize perturbation network and target_perturbation network
-		self.actor = ResidualActor(self.state_seq_dim, self.action_dim, self.action_seq_dim, self.max_action, self.n_action_steps, phi).to(self.device)
+		self.actor = ResidualActor(self.state_seq_dim, self.action_dim, self.action_seq_dim, self.max_action, self.n_action_steps, self.phi).to(self.device)
 		self.actor_target = copy.deepcopy(self.actor)
 		self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=lr_actor)
 
@@ -171,14 +173,13 @@ class BC_BCQ(nn.Module):
 		self.vae_optimizer = torch.optim.Adam(self.vae.parameters()) 
 
 		self.discount = discount
-		self.tau = tau
 		self.lmbda = lmbda
 
 		self.normalizer = LinearNormalizer()
 
 		from script.eval_policy import BC
 		# 新增BC策略组件
-		self.bc_policy = BC('put_apple_cabinet', head_camera_type, 600, expert_data_num, seed=0)
+		self.bc_policy = BC('put_apple_cabinet', head_camera_type, checkpoint_num = 600, expert_data_num = expert_data_num, seed=0)
 		# self.bc_policy.normalizer = self.normalizer
 		# self.policy.update_obs(obs)	# 更新obs
 		# actions = self.policy.get_action(obs)	# 获取BC模型动作
@@ -225,8 +226,8 @@ class BC_BCQ(nn.Module):
 			ngt_residual_actions = (nactions - nbc_actions)	# get ground_truth residual action, shape of result: [batch_size, n_steps, action_dim]
 			nactions_flat = self.normalizer['action'].normalize(nactions) # Normalize, shape of result: [batch_size, horzion, action_dim]
 			nactions_flat = nactions_flat[:, :self.n_action_steps, :]  # shape of result: [batch_size, n_action_steps, action_dim], if horzion==n_action_steps
-			nactions_flat = nactions.view(batch_size, -1)  # shape of result: [batch_size, n_steps*action_dim]
-			ngt_residual_actions_flat = ngt_residual_actions.view(batch_size, -1)  # shape of result: [batch_size, n_steps*action_dim]
+			nactions_flat = nactions.view(batch_size, -1)  # shape of result: [batch_size, n_action_steps*action_dim]
+			ngt_residual_actions_flat = ngt_residual_actions.view(batch_size, -1)  # shape of result: [batch_size, n_action_steps*action_dim]
 			
 			# process reward and dones
 			nrewards = batch['reward'].sum(dim=1)	# [batch_size, horizon] -> [batch_size, ]
@@ -244,7 +245,7 @@ class BC_BCQ(nn.Module):
 
 			# Variational Auto-Encoder Training
 			recon, mean, std = self.vae(state, ngt_residual_actions_flat)
-			recon_loss = F.mse_loss(recon, ngt_residual_actions)
+			recon_loss = F.mse_loss(recon.view(batch_size, -1), ngt_residual_actions_flat)
 			KL_loss	= -0.5 * (1 + torch.log(std.pow(2)) - mean.pow(2) - std.pow(2)).mean()
 			vae_loss = recon_loss + 0.5 * KL_loss
 
@@ -256,32 +257,32 @@ class BC_BCQ(nn.Module):
 			with torch.no_grad():
 				# Duplicate next state 10 (repeat_num) times
 				repeat_num = 10
-				next_state_repeat_torch = torch.repeat_interleave(next_state, repeat_num, 0)
-				next_state_repeat_dict = self.repeat_dict_interleave(batch['next_obs'], repeat_num)
+				next_state_repeat_torch = torch.repeat_interleave(next_state, repeat_num, 0)	# shape of result: [batch_size*repeat_num, n_obs_steps * obs_feature_dim]
+				next_state_repeat_dict = self.repeat_dict_interleave(batch['next_obs'], repeat_num)	# shape of result: [batch_size*repeat_num, horzion, channels, H, W]
 				
 				# Get base action
-				next_nbc_action = self.get_base_action(next_state_repeat_dict)
+				next_nbc_action = self.get_base_action(next_state_repeat_dict)	# shape of result: [batch_size*repeat_num, n_action_steps, action_dim]
 				# Get sampled actions from the VAE
-				next_nsampled_actions = self.vae.decode(next_state_repeat_torch)
+				next_nsampled_actions = self.vae.decode(next_state_repeat_torch)	# shape of result: [batch_size*repeat_num, n_action_steps, action_dim]
 				# Get perturbed actions from actor
-				next_nsampled_actions = self.actor_target(next_state_repeat_torch, next_nsampled_actions)
+				next_nsampled_actions = self.actor_target(next_state_repeat_torch, next_nsampled_actions)	# shape of result: [batch_size*repeat_num, n_action_steps, action_dim]
 				# Combine base actions and perturbed actions
-				next_nsampled_actions = next_nsampled_actions + next_nbc_action
+				next_nsampled_actions = next_nsampled_actions + next_nbc_action	# shape of result: [batch_size*repeat_num, n_action_steps, action_dim]
 				
 				# Compute value of perturbed actions predicted via Base Policy
-				target_Q1, target_Q2 = self.critic_target(next_state_repeat_torch, next_nsampled_actions)
+				target_Q1, target_Q2 = self.critic_target(next_state_repeat_torch, next_nsampled_actions)	# shape of result: [batch_size*repeat_num, 1]
 
 				# Soft Clipped Double Q-learning 
-				target_Q = self.lmbda * torch.min(target_Q1, target_Q2) + (1. - self.lmbda) * torch.max(target_Q1, target_Q2)
+				target_Q = self.lmbda * torch.min(target_Q1, target_Q2) + (1. - self.lmbda) * torch.max(target_Q1, target_Q2)	# shape of result: [batch_size*repeat_num, 1]
 				# Take max over each action sampled from the VAE
-				target_Q = target_Q.reshape(batch_size, -1).max(1)[0].reshape(-1, 1)
+				target_Q = target_Q.reshape(batch_size, -1).max(1)[0].reshape(-1, 1)	# shape of result: [batch_size, 1]
 
 				# Compute Q value using n_step rewards
-				reward_expanded = reward.unsqueeze(1)  # [batch_size, 1]
-				not_done_last = not_done[:, -1].unsqueeze(1)  # 取最后一步的终止标志 [batch_size, 1]
-				target_Q = reward_expanded + (self.discount ** self.n_action_steps) * not_done_last * target_Q
+				reward_expanded = reward.unsqueeze(1)  # shape of result: [batch_size, 1]
+				not_done_last = not_done[:, -1].unsqueeze(1)  # shape of result: [batch_size, 1]
+				target_Q = reward_expanded + (self.discount * self.n_action_steps) * not_done_last * target_Q	# shape of result: [batch_size, 1]
 			
-			current_Q1, current_Q2 = self.critic(state, action)
+			current_Q1, current_Q2 = self.critic(state, action)	# # shape of result: [batch_size, 1]
 			critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
 			
 			self.critic_optimizer.zero_grad()
@@ -289,8 +290,8 @@ class BC_BCQ(nn.Module):
 			self.critic_optimizer.step()
 
 			# Pertubation Model / Action Training
-			nsampled_actions = self.vae.decode(state)
-			perturbed_actions = nbc_actions + self.actor(state, nsampled_actions)
+			nsampled_actions = self.vae.decode(state)	# shape of result: [batch_size, n_action_step, action_dim]
+			perturbed_actions = nbc_actions + self.actor(state, nsampled_actions)	# shape of result: [batch_size, n_action_step, action_dim]
 
 			# Update through DPG
 			actor_loss = -self.critic.q1(state, perturbed_actions).mean()
@@ -377,7 +378,7 @@ class BC_BCQ(nn.Module):
 				# Compute Q value using n_step rewards
 				reward_expanded = reward.unsqueeze(1)
 				not_done_last = not_done[:, -1].unsqueeze(1)  # 取最后一步的终止标志 [batch_size, 1]
-				target_Q = reward_expanded + (self.discount ** self.n_action_steps) * not_done_last * target_Q
+				target_Q = reward_expanded + (self.discount * self.n_action_steps) * not_done_last * target_Q
 			
 			# Calculate critic loss
 			current_Q1, current_Q2 = self.critic(state, action)
@@ -421,7 +422,7 @@ class BC_BCQ(nn.Module):
 			residual_actions = self.actor(state, sampled_actions)
 			
 			# Combine the base actions and residual actions
-			final_actions = sampled_actions + residual_actions
+			final_actions = base_action_seq + residual_actions
 			# Output final_actions
 			final_actions = final_actions.squeeze(0).cpu().numpy()  # [n_action_steps, action_dim]
 			

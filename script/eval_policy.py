@@ -21,6 +21,7 @@ from diffusion_policy.workspace.robotworkspace import BCQRobotWorkspace
 
 from diffusion_policy.env_runner.bc_runner import BCRunner
 from diffusion_policy.env_runner.bcq_runner import BCQRunner
+from diffusion_policy.env_runner.bc_bcq_runner import BC_BCQRunner
 
 current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
@@ -51,6 +52,21 @@ class BCQ:
     def __init__(self, task_name, head_camera_type: str, checkpoint_num: int, expert_data_num: int, seed: int):
         self.policy = get_policy(f'checkpoints/{task_name}_{head_camera_type}_{expert_data_num}_bcq_{seed}/{checkpoint_num}.ckpt', None, 'cuda:0', name='bcq')
         self.runner = BCQRunner(output_dir=None)
+
+    def update_obs(self, observation):
+        self.runner.update_obs(observation)
+    
+    def get_action(self, observation=None):
+        action = self.runner.get_action(self.policy, observation)
+        return action
+
+    def get_last_obs(self):
+        return self.runner.obs[-1]
+    
+class BC_BCQ:
+    def __init__(self, task_name, head_camera_type: str, checkpoint_num: int, expert_data_num: int, seed: int):
+        self.policy = get_policy(f'checkpoints/{task_name}_{head_camera_type}_{expert_data_num}_bc_bcq_{seed}/{checkpoint_num}.ckpt', None, 'cuda:0', name='bcq')
+        self.runner = BC_BCQRunner(output_dir=None)
 
     def update_obs(self, observation):
         self.runner.update_obs(observation)
@@ -158,7 +174,9 @@ def main(usr_args):
 
     if policy_name == 'bcq':
         policy = BCQ(task_name, head_camera_type, checkpoint_num, expert_data_num, seed)
-
+    
+    if policy_name == 'bc_bcq':
+        policy = BC_BCQ(task_name, head_camera_type, checkpoint_num, expert_data_num, seed)
     # policy = YOUR_POLICY() # TODO: init your policy
     st_seed, suc_num = test_policy(task_name, task, args, policy, st_seed, test_num=test_num)
     suc_nums.append(suc_num)
