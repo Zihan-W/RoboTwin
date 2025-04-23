@@ -22,11 +22,12 @@ from diffusion_policy.env_runner.dp_runner import DPRunner
 
 current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
+project_directory = os.path.dirname(parent_directory)
 
 def get_policy(checkpoint, output_dir, device):
     
     # load checkpoint
-    payload = torch.load(open('./policy/Diffusion-Policy/'+checkpoint, 'rb'), pickle_module=dill)
+    payload = torch.load(open(f'{project_directory}/policy/Diffusion-Policy/'+checkpoint, 'rb'), pickle_module=dill)
     cfg = payload['cfg']
     cls = hydra.utils.get_class(cfg._target_)
     workspace = cls(cfg, output_dir=output_dir)
@@ -54,6 +55,12 @@ class DP:
     
     def get_action(self, observation=None):
         action = self.runner.get_action(self.policy, observation)
+        return action
+    
+    def get_action_as_base(self, observation=None):
+        # torch.Size([32, 8, 3, 240, 320])
+        action = self.policy.predict_action(observation)
+        action = action['action_pred']
         return action
 
     def get_last_obs(self):

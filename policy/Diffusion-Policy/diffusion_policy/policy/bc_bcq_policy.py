@@ -179,10 +179,13 @@ class BC_BCQ(nn.Module):
 
 		from script.eval_policy import BC
 		# 新增BC策略组件
-		self.bc_policy = BC('put_apple_cabinet', head_camera_type, checkpoint_num = 600, expert_data_num = expert_data_num, seed=0)
-		# self.bc_policy.normalizer = self.normalizer
-		# self.policy.update_obs(obs)	# 更新obs
-		# actions = self.policy.get_action(obs)	# 获取BC模型动作
+		# self.bc_policy = BC('put_apple_cabinet', head_camera_type, checkpoint_num = 600, expert_data_num = expert_data_num, seed=0)
+		# # self.bc_policy.normalizer = self.normalizer
+		# # self.policy.update_obs(obs)	# 更新obs
+		# # actions = self.policy.get_action(obs)	# 获取BC模型动作
+
+		from script.eval_policy_dp import DP
+		self.bc_policy = DP('put_apple_cabinet', head_camera_type, checkpoint_num = 600, expert_data_num = expert_data_num, seed=0)
 
 	def get_base_action(self, obs_dict):
 		"""获取BC基础动作并进行归一化处理"""

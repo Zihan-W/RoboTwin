@@ -1,5 +1,5 @@
-task_name: put_apple_cabinet
-render_freq: 20
+task_name: put_apple_cabinet_bc_bcq
+render_freq: 10
 eval_video_log: false
 use_seed: false
 collect_data: true
