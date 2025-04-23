@@ -91,11 +91,11 @@ class ResidualVAE(nn.Module):
 		self.n_action_steps = n_action_steps
 
 
-	def forward(self, state, action_seq):
+	def forward(self, state, action_seq_flat):
 		'''
 		Learn distribution of residual actions
 		'''
-		z = F.relu(self.e1(torch.cat([state, action_seq], 1)))
+		z = F.relu(self.e1(torch.cat([state, action_seq_flat], 1)))
 		z = F.relu(self.e2(z))
 
 		mean = self.mean(z)
@@ -150,7 +150,7 @@ class BC_BCQ(nn.Module):
 		self.n_action_steps = n_action_steps
 		self.action_seq_dim = self.action_dim * n_action_steps  # 多步动作序列维度
 
-		self.max_action = torch.full((self.action_seq_dim,), 2.7).to(self.device)  # 设置动作上限值为2.7
+		self.max_action = torch.full((self.action_seq_dim,), 1.0).to(self.device)
 
 		self.obs_encoder = obs_encoder
 		self.obs_feature_dim = obs_encoder.output_shape()[0]
@@ -222,19 +222,26 @@ class BC_BCQ(nn.Module):
 				nobs_features = nobs_features.view(batch_size, -1)  # shape of result: [batch_size, n_obs_steps * obs_feature_dim]
 				next_nobs_features = next_nobs_features.view(batch_size, -1)  # shape of result: [batch_size, n_obs_steps * obs_feature_dim]
 
-			# process action and reshape
-			nactions = batch['action']
-			with torch.no_grad():
+				# process action and reshape
+				nactions = batch['action']
 				nbc_actions = self.get_base_action(batch['obs'])  # get BC action as base action，shape of result: [batch_size, n_steps, action_dim]
-			ngt_residual_actions = (nactions - nbc_actions)	# get ground_truth residual action, shape of result: [batch_size, n_steps, action_dim]
-			nactions_flat = self.normalizer['action'].normalize(nactions) # Normalize, shape of result: [batch_size, horzion, action_dim]
-			nactions_flat = nactions_flat[:, :self.n_action_steps, :]  # shape of result: [batch_size, n_action_steps, action_dim], if horzion==n_action_steps
-			nactions_flat = nactions.view(batch_size, -1)  # shape of result: [batch_size, n_action_steps*action_dim]
-			ngt_residual_actions_flat = ngt_residual_actions.view(batch_size, -1)  # shape of result: [batch_size, n_action_steps*action_dim]
-			
-			# process reward and dones
-			nrewards = batch['reward'].sum(dim=1)	# [batch_size, horizon] -> [batch_size, ]
-			nnot_done = 1 - batch['done']	# [batch_size, horizon]
+				ngt_residual_actions = (nactions - nbc_actions)	# get ground_truth residual action, shape of result: [batch_size, n_steps, action_dim]
+				nactions_flat = self.normalizer['action'].normalize(nactions) # Normalize, shape of result: [batch_size, horzion, action_dim]
+				nactions_flat = nactions_flat[:, :self.n_action_steps, :]  # shape of result: [batch_size, n_action_steps, action_dim], if horzion==n_action_steps
+				nactions_flat = nactions.view(batch_size, -1)  # shape of result: [batch_size, n_action_steps*action_dim]
+				ngt_residual_actions_flat = ngt_residual_actions.view(batch_size, -1)  # shape of result: [batch_size, n_action_steps*action_dim]
+				
+				# process reward and dones
+				done = batch['done']  # [batch_size, n_action_steps]
+				done_cum = torch.cumsum(done, dim=1)  # [batch_size, n_action_steps]
+				valid_mask = (done_cum == 0).float()  # [batch_size, n_action_steps]
+				
+				gamma_powers = torch.tensor([self.discount**k for k in range(self.n_action_steps)], 
+							device=self.device)  # [n_action_steps,]
+				discounted_rewards = batch['reward'] * gamma_powers.unsqueeze(0) * valid_mask  # [batch_size, n_action_steps]
+				nrewards = discounted_rewards.sum(dim=1)  # [batch_size,]
+
+				any_done = (done_cum[:, -1] > 0).float().unsqueeze(1)  # [batch_size, 1]
 
 			# Sample replay buffer / batch
 			# TODO：maybe modify data used
@@ -242,7 +249,7 @@ class BC_BCQ(nn.Module):
 			next_state = next_nobs_features.to(self.device)
 			action = nactions_flat.to(self.device)
 			reward = nrewards.to(self.device)
-			not_done = nnot_done.to(self.device)
+			not_done = 1.0 - any_done  # [batch_size, 1]
 			ngt_residual_actions = ngt_residual_actions.to(self.device)
 			ngt_residual_actions_flat = ngt_residual_actions_flat.to(self.device)
 
@@ -278,13 +285,14 @@ class BC_BCQ(nn.Module):
 				# Soft Clipped Double Q-learning 
 				target_Q = self.lmbda * torch.min(target_Q1, target_Q2) + (1. - self.lmbda) * torch.max(target_Q1, target_Q2)	# shape of result: [batch_size*repeat_num, 1]
 				# Take max over each action sampled from the VAE
-				target_Q = target_Q.reshape(batch_size, -1).max(1)[0].reshape(-1, 1)	# shape of result: [batch_size, 1]
+				target_Q = target_Q.view(batch_size, -1).max(dim=1)[0].unsqueeze(1)	# shape of result: [batch_size, 1]
 
 				# Compute Q value using n_step rewards
-				reward_expanded = reward.unsqueeze(1)  # shape of result: [batch_size, 1]
-				not_done_last = not_done[:, -1].unsqueeze(1)  # shape of result: [batch_size, 1]
-				target_Q = reward_expanded + (self.discount * self.n_action_steps) * not_done_last * target_Q	# shape of result: [batch_size, 1]
-			
+				# reward_expanded = reward.unsqueeze(1)  # shape of result: [batch_size, 1]
+				# not_done_last = not_done[:, -1].unsqueeze(1)  # shape of result: [batch_size, 1]
+				# target_Q = reward_expanded + (self.discount ** self.n_action_steps) * not_done_last * target_Q	# shape of result: [batch_size, 1]
+				target_Q = reward.unsqueeze(1) + (gamma_powers[-1] * self.discount) * not_done * target_Q
+				
 			current_Q1, current_Q2 = self.critic(state, action)	# # shape of result: [batch_size, 1]
 			critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
 			
@@ -338,15 +346,23 @@ class BC_BCQ(nn.Module):
 			ngt_residual_actions_flat = ngt_residual_actions.view(batch_size, -1)
 
 			# process rewards and dones
-			nrewards = batch['reward'].sum(dim=1)
-			nnot_done = 1 - batch['done']
+			done = batch['done']  # [batch_size, n_action_steps]
+			done_cum = torch.cumsum(done, dim=1)  # [batch_size, n_action_steps]
+			valid_mask = (done_cum == 0).float()  # [batch_size, n_action_steps]
+			
+			gamma_powers = torch.tensor([self.discount**k for k in range(self.n_action_steps)], 
+						device=self.device)  # [n_action_steps,]
+			discounted_rewards = batch['reward'] * gamma_powers.unsqueeze(0) * valid_mask  # [batch_size, n_action_steps]
+			nrewards = discounted_rewards.sum(dim=1)  # [batch_size,]
+
+			any_done = (done_cum[:, -1] > 0).float().unsqueeze(1)  # [batch_size, 1]
 
 			# data used
 			state = nobs_features.to(self.device)
 			next_state = next_nobs_features.to(self.device)
 			action = nactions_flat.to(self.device)
 			reward = nrewards.to(self.device)
-			not_done = nnot_done.to(self.device)
+			not_done = 1.0 - any_done  # [batch_size, 1]
 			ngt_residual_actions = ngt_residual_actions.to(self.device)
 			ngt_residual_actions_flat = ngt_residual_actions_flat.to(self.device)
 
@@ -379,9 +395,7 @@ class BC_BCQ(nn.Module):
 				# Take max over each action sampled from the VAE
 				target_Q = target_Q.reshape(batch_size, -1).max(1)[0].reshape(-1, 1)
 				# Compute Q value using n_step rewards
-				reward_expanded = reward.unsqueeze(1)
-				not_done_last = not_done[:, -1].unsqueeze(1)  # 取最后一步的终止标志 [batch_size, 1]
-				target_Q = reward_expanded + (self.discount * self.n_action_steps) * not_done_last * target_Q
+				target_Q = reward.unsqueeze(1) + (gamma_powers[-1] * self.discount) * not_done * target_Q
 			
 			# Calculate critic loss
 			current_Q1, current_Q2 = self.critic(state, action)
