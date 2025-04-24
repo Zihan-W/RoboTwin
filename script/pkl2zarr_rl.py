@@ -9,6 +9,66 @@ import einops
 import cv2
 import zarr.meta
 
+import zarr
+import numpy as np
+from pathlib import Path
+
+def process_done(data):
+    # 获取episode结束索引
+    episode_ends = data['meta']['episode_ends'][:]
+    
+    # 处理done字段
+    if 'done' not in data['data']:
+        # 创建初始化为0的done数组
+        total_steps = data['data']['action'].shape[0]
+        done = np.zeros(total_steps, dtype=np.int32)
+        
+        # 标记episode终止位置
+        for end_idx in episode_ends:
+            if end_idx <= total_steps:
+                done[end_idx-1] = 1
+            else:
+                print(f"Warning: Episode end index {end_idx} exceeds dataset size {total_steps}")
+        
+        # 将done数组写入数据集（需要写入权限时使用）
+        # 注意：如果数据集是只读模式，这里应该在内存中创建副本
+        data['data']['done'] = done
+        
+    return data
+
+def process_next_obs(data):
+    episode_ends = data['meta']['episode_ends'][:]  # 获取所有episode结束位置
+    head_cam = data['data']['head_camera']  # 原始头摄像头数据
+    next_head_cam = np.zeros_like(head_cam)  # 初始化next_head_cam
+    state = data['data']['state']
+    next_state = np.zeros_like(state)
+    
+    start_idx = 0
+    for end_idx in episode_ends:
+        # 处理当前episode内的数据
+        episode_slice = slice(start_idx, end_idx)
+        
+        # 常规平移：当前episode内，next_head_cam[t] = head_cam[t+1]
+        if end_idx - start_idx > 1:  # 确保episode长度>1
+            next_head_cam[episode_slice][:-1] = head_cam[episode_slice][1:]
+            next_state[episode_slice][:-1] = state[episode_slice][1:]
+        
+        # episode最后一个时间步的next_head_cam设为0（终止状态）
+        next_head_cam[end_idx - 1] = 0  # -1因为end_idx是exclusive的
+        next_state[end_idx - 1] = 0
+        
+        start_idx = end_idx  # 移动到下一个episode
+    
+    # 处理最后一个episode之后的数据（如果有）
+    if start_idx < len(head_cam):
+        next_head_cam[start_idx:-1] = head_cam[start_idx+1:]
+        next_head_cam[-1] = 0  # 整个数据集的最后一个时间步
+        next_state[start_idx:-1] = state[start_idx+1:]
+        next_state[-1] = 0  # 整个数据集的最后一个时间步
+    
+    data['data']['next_head_camera'] = next_head_cam
+    data['data']['next_state'] = next_state
+    return data
 
 def main():
     parser = argparse.ArgumentParser(description='Process some episodes.')
@@ -22,7 +82,7 @@ def main():
     task_name = args.task_name
     num = args.expert_data_num
     head_camera_type = args.head_camera_type
-    load_dir = f'data/{task_name}_{head_camera_type}_pkl'
+    load_dir = f'data/{task_name}_{head_camera_type}_{num}_pkl'
     
     total_count = 0
 
@@ -103,5 +163,11 @@ def main():
     zarr_data.create_dataset('apple_pose', data=apple_pose_arrays, chunks=apple_pose_chunk_size, dtype='float32', overwrite=True, compressor=compressor)  # 存储apple_pose
     zarr_data.create_dataset('cabinet_pose', data=cabinet_pose_arrays, chunks=cabinet_pose_chunk_size, dtype='float32', overwrite=True, compressor=compressor)  # 存储cabinet_pose
     
+    # process zarr and add some keys
+    print("processing zarr and add some keys")
+    data = zarr.open(save_dir, mode='a')  # 'a'模式允许修改
+    data = process_done(data)
+    data = process_next_obs(data)
 if __name__ == '__main__':
     main()
+
