@@ -943,13 +943,15 @@ class BCQRobotWorkspace(BaseWorkspace):
 
                 actor_losses = list()
                 critic_losses = list()
+                recon_losses = list()
+                KL_losses = list()
                 with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):
                         batch = dataset.postprocess(batch, device)
                         if train_sampling_batch is None:
                             train_sampling_batch = batch
-                        raw_critic_loss, raw_actor_loss = self.model.update(batch)
+                        raw_critic_loss, raw_actor_loss, raw_recon_loss, raw_KL_loss, fid_gen, fid_recon = self.model.update(batch)
                         
                         # update ema
                         if cfg.training.use_ema:
@@ -959,11 +961,17 @@ class BCQRobotWorkspace(BaseWorkspace):
                         tepoch.set_postfix(loss=raw_actor_loss, refresh=False)
                         critic_losses.append(raw_critic_loss)
                         actor_losses.append(raw_actor_loss)
+                        recon_losses.append(raw_recon_loss)
+                        KL_losses.append(raw_KL_loss)
                         step_log = {
                             'critic_loss': raw_critic_loss,
                             'actor_loss': raw_actor_loss,
+                            'recon_loss': raw_recon_loss,
+                            'KL_loss': raw_KL_loss,
                             'global_step': self.global_step,
                             'epoch': self.epoch,
+                            'fid_gen': fid_gen,
+                            'fid_recon': fid_recon,
                         }
 
                         is_last_batch = (batch_idx == (len(train_dataloader)-1))
@@ -980,8 +988,12 @@ class BCQRobotWorkspace(BaseWorkspace):
                 # replace train_loss with epoch average
                 critic_loss = np.mean(critic_losses)
                 actor_loss = np.mean(actor_losses)
-                step_log['critic_loss'] = critic_loss
-                step_log['actor_loss'] = actor_loss
+                recon_loss = np.mean(recon_losses)
+                KL_loss = np.mean(KL_losses)
+                step_log['mean_critic_loss'] = critic_loss
+                step_log['mean_actor_loss'] = actor_loss
+                step_log['mean_recon_loss'] = recon_loss
+                step_log['mean_KL_loss'] = KL_loss
 
                 # ========= eval for this epoch ==========
                 policy = self.model
@@ -1000,22 +1012,30 @@ class BCQRobotWorkspace(BaseWorkspace):
                     with torch.no_grad():
                         val_critic_losses = list()
                         val_actor_losses = list()
+                        val_recon_losses = list()
+                        val_KL_losses = list()
                         with tqdm.tqdm(val_dataloader, desc=f"Validation epoch {self.epoch}", 
                                 leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                             for batch_idx, batch in enumerate(tepoch):
                                 batch = dataset.postprocess(batch, device)
-                                raw_critic_loss, raw_actor_loss = self.model.evaluate(batch)
+                                raw_critic_loss, raw_actor_loss, raw_recon_loss, raw_KL_loss = self.model.evaluate(batch)
                                 val_critic_losses.append(raw_critic_loss)
                                 val_actor_losses.append(raw_actor_loss)
+                                val_recon_losses.append(raw_recon_loss)
+                                val_KL_losses.append(raw_KL_loss)
                                 if (cfg.training.max_val_steps is not None) \
                                     and batch_idx >= (cfg.training.max_val_steps-1):
                                     break
                         if len(val_critic_losses) > 0 and len(val_actor_losses) > 0:
                             val_critic_loss = torch.mean(torch.tensor(val_critic_losses)).item()
                             val_actor_loss = torch.mean(torch.tensor(val_actor_losses)).item()
+                            val_recon_loss = torch.mean(torch.tensor(val_recon_losses)).item()
+                            val_KL_loss = torch.mean(torch.tensor(val_KL_losses)).item()
                             # log epoch average validation loss
                             step_log['val_critic_loss'] = val_critic_loss
                             step_log['val_actor_loss'] = val_actor_loss
+                            step_log['val_recon_loss'] = val_recon_loss
+                            step_log['val_KL_loss'] = val_KL_loss
 
                 # run diffusion sampling on a training batch
                 if (self.epoch % cfg.training.sample_every) == 0:

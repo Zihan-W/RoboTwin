@@ -72,15 +72,15 @@ class VAE(nn.Module):
 	def __init__(self, state_dim, action_dim, latent_dim, max_action, n_action_steps, device):
 		super(VAE, self).__init__()
 		action_seq_dim = action_dim * n_action_steps
-		self.e1 = nn.Linear(state_dim + action_seq_dim, 750)
-		self.e2 = nn.Linear(750, 750)
+		self.e1 = nn.Linear(state_dim + action_seq_dim, 256)
+		self.e2 = nn.Linear(256, 128)
 
-		self.mean = nn.Linear(750, latent_dim)
-		self.log_std = nn.Linear(750, latent_dim)
+		self.mean = nn.Linear(128, latent_dim)
+		self.log_std = nn.Linear(128, latent_dim)
 
-		self.d1 = nn.Linear(state_dim + latent_dim, 750)
-		self.d2 = nn.Linear(750, 750)
-		self.d3 = nn.Linear(750, action_seq_dim)
+		self.d1 = nn.Linear(state_dim + latent_dim, 128)
+		self.d2 = nn.Linear(128, 256)
+		self.d3 = nn.Linear(256, action_seq_dim)
 
 		self.max_action = max_action
 		self.latent_dim = latent_dim
@@ -95,7 +95,7 @@ class VAE(nn.Module):
 
 		mean = self.mean(z)
 		# Clamped for numerical stability 
-		log_std = self.log_std(z).clamp(-4, 15)
+		log_std = self.log_std(z)
 		std = torch.exp(log_std)
 		z = mean + std * torch.randn_like(std)
 		
@@ -107,7 +107,7 @@ class VAE(nn.Module):
 	def decode(self, state, z=None):
 		# When sampling from the VAE, the latent vector is clipped to [-0.5, 0.5]
 		if z is None:
-			z = torch.randn((state.shape[0], self.latent_dim)).to(self.device).clamp(-0.5,0.5)
+			z = torch.randn((state.shape[0], self.latent_dim)).to(self.device)
 
 		a = F.relu(self.d1(torch.cat([state, z], 1)))
 		a = F.relu(self.d2(a))
@@ -155,7 +155,6 @@ class BCQ(nn.Module):
 		self.vae = VAE(self.state_seq_dim, self.action_dim, latent_dim, self.max_action, self.n_action_steps, device).to(device)
 		self.vae_optimizer = torch.optim.Adam(self.vae.parameters()) 
 
-
 		self.discount = discount
 		self.tau = tau
 		self.lmbda = lmbda
@@ -179,6 +178,10 @@ class BCQ(nn.Module):
 		batch = dict_apply(batch, lambda x: x.to(self.device) if isinstance(x, torch.Tensor) else x)
 		for it in range(iterations):
 			with torch.no_grad():
+				# Gsussian Noise
+				noise_level = 0.1  # 根据动作范围调整（如动作范围±2.7，噪声设为0.1~0.3）
+				batch['action'] += noise_level * torch.randn_like(batch['action'])
+
 				nobs = self.normalizer.normalize(batch['obs'])  # 正则化, batch_size, horzion, channels, H, W
 				next_nobs = self.normalizer.normalize(batch['next_obs'])
 				# obs reshape
@@ -191,11 +194,22 @@ class BCQ(nn.Module):
 				nobs_features = nobs_features.view(batch_size, -1)  # 转换为 [batch_size, n_obs_steps * obs_feature_dim]
 				next_nobs_features = next_nobs_features.view(batch_size, -1)  # 转换为 [batch_size, n_obs_steps * obs_feature_dim]
 
-			nactions = self.normalizer['action'].normalize(batch['action']) # 正则化, [batch_size, horzion, action_dim]
-			nactions = nactions[:, :self.n_action_steps, :]  # [batch_size, n_steps, action_dim]
-			nactions_flat = nactions.view(batch_size, -1)  # [batch_size, n_steps*action_dim]
-			nrewards = batch['reward'].sum(dim=1)	# [batch_size, horizon] -> [batch_size]
-			nnot_done = 1 - batch['done']	# [batch_size, horizon]
+				nactions = self.normalizer['action'].normalize(batch['action']) # 正则化, [batch_size, horzion, action_dim]
+				nactions = nactions[:, :self.n_action_steps, :]  # [batch_size, n_steps, action_dim]
+				nactions_flat = nactions.view(batch_size, -1)  # [batch_size, n_steps*action_dim]
+				
+				# process rewards and dones
+				done = batch['done']  # [batch_size, n_action_steps]
+				done_cum = torch.cumsum(done, dim=1)  # [batch_size, n_action_steps]
+				valid_mask = (done_cum == 0).float()  # [batch_size, n_action_steps]
+				
+				gamma_powers = torch.tensor([self.discount**k for k in range(self.n_action_steps)], 
+							device=self.device)  # [n_action_steps,]
+				# rewards = nactions = self.normalizer.normalize(batch['reward'])
+				discounted_rewards = batch['reward'] * gamma_powers.unsqueeze(0) * valid_mask  # [batch_size, n_action_steps]
+				nrewards = discounted_rewards.sum(dim=1)  # [batch_size,]
+
+				any_done = (done_cum[:, -1] > 0).float().unsqueeze(1)  # [batch_size, 1]
 
 			# Sample replay buffer / batch
 			# TODO：可能需要重新评估用到的数据
@@ -203,18 +217,35 @@ class BCQ(nn.Module):
 			next_state = next_nobs_features.to(device)
 			action = nactions_flat.to(device)
 			reward = nrewards.to(device)
-			not_done = nnot_done.to(device)
+			not_done = 1.0 - any_done
 
 			# Variational Auto-Encoder Training
 			recon, mean, std = self.vae(state, action)
 			recon_loss = F.mse_loss(recon, nactions.to(device))
 			KL_loss	= -0.5 * (1 + torch.log(std.pow(2)) - mean.pow(2) - std.pow(2)).mean()
-			vae_loss = recon_loss + 0.5 * KL_loss
+			vae_loss = recon_loss + 2.0 * KL_loss
 
 			self.vae_optimizer.zero_grad()
 			vae_loss.backward()
 			self.vae_optimizer.step()
 
+			# FID record
+			with torch.no_grad():
+				# 生成动作（与重构动作分开）
+				batch_size = state.shape[0]
+				latent_dim = self.vae.latent_dim
+				sampled_z = torch.randn(batch_size, latent_dim).to(self.device)  # 正确：显式生成噪声
+				generated_actions = self.vae.decode(state, sampled_z)
+				
+				# 转换为CPU numpy数组
+				real_actions = nactions.cpu().numpy()           # [B, T, D]
+				recon_actions = recon.detach().cpu().numpy()     # [B, T, D]
+				gen_actions = generated_actions.detach().cpu().numpy()  # [B, T, D]
+				
+				# 计算FID（重构动作 vs 真实动作）
+				fid_recon = self.calculate_fid(real_actions, recon_actions)
+				# 计算FID（生成动作 vs 真实动作）
+				fid_gen = self.calculate_fid(real_actions, gen_actions)
 
 			# Critic Training
 			with torch.no_grad():
@@ -228,15 +259,9 @@ class BCQ(nn.Module):
 				target_Q = self.lmbda * torch.min(target_Q1, target_Q2) + (1. - self.lmbda) * torch.max(target_Q1, target_Q2)
 				# Take max over each action sampled from the VAE
 				target_Q = target_Q.reshape(batch_size, -1).max(1)[0].reshape(-1, 1)
-
-				# 修改：计算n步累计奖励的Q值目标
-				# target_Q = reward + not_done * self.discount * target_Q
-				# 扩展维度以匹配计算
-				reward_expanded = reward.unsqueeze(1)  # [batch_size, 1]
-				not_done_last = not_done[:, -1].unsqueeze(1)  # 取最后一步的终止标志 [batch_size, 1]
 				
-				# 计算多步TD目标
-				target_Q = reward_expanded + (self.discount ** self.n_action_steps) * not_done_last * target_Q
+				# calculate n_step Q-value
+				target_Q = reward.unsqueeze(1) + (gamma_powers[-1] * self.discount) * not_done * target_Q
 			current_Q1, current_Q2 = self.critic(state, action)
 			critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
 			self.critic_optimizer.zero_grad()
@@ -254,7 +279,6 @@ class BCQ(nn.Module):
 			actor_loss.backward()
 			self.actor_optimizer.step()
 
-
 			# Update Target Networks 
 			for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
 				target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
@@ -262,20 +286,18 @@ class BCQ(nn.Module):
 			for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
 				target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-			return critic_loss.item(), actor_loss.item()
+			return critic_loss.item(), actor_loss.item(), recon_loss.item(), KL_loss.item(), fid_gen.item(), fid_recon.item()
 		
 	def set_normalizer(self, normalizer: LinearNormalizer):
 		self.normalizer.load_state_dict(normalizer.state_dict())
 
 	def evaluate(self, batch):
 		batch_size = batch['reward'].shape[0]
-		# 禁用梯度计算
-		with torch.no_grad():			
-			# === 数据预处理（与train方法一致）===
+		with torch.no_grad():
+			# process obs and action			
 			nobs = self.normalizer.normalize(batch['obs'])
 			next_nobs = self.normalizer.normalize(batch['next_obs'])
 			
-			# 处理观测序列
 			this_nobs = dict_apply(nobs,
 					lambda x: x[:,:self.n_obs_steps,...].reshape(-1,*x.shape[2:]))
 			next_this_nobs = dict_apply(next_nobs,
@@ -287,8 +309,17 @@ class BCQ(nn.Module):
 			nactions = self.normalizer['action'].normalize(batch['action'])
 			nactions = nactions[:, :self.n_action_steps, :]
 			nactions_flat = nactions.view(batch_size, -1)
-			nrewards = batch['reward'].sum(dim=1)
-			nnot_done = 1 - batch['done']
+			# process rewards and dones
+			done = batch['done']  # [batch_size, n_action_steps]
+			done_cum = torch.cumsum(done, dim=1)  # [batch_size, n_action_steps]
+			valid_mask = (done_cum == 0).float()  # [batch_size, n_action_steps]
+			
+			gamma_powers = torch.tensor([self.discount**k for k in range(self.n_action_steps)], 
+						device=self.device)  # [n_action_steps,]
+			discounted_rewards = batch['reward'] * gamma_powers.unsqueeze(0) * valid_mask  # [batch_size, n_action_steps]
+			nrewards = discounted_rewards.sum(dim=1)  # [batch_size,]
+
+			any_done = (done_cum[:, -1] > 0).float().unsqueeze(1)  # [batch_size, 1]
 
 			# === VAE损失计算 ===
 			state = nobs_features
@@ -301,7 +332,7 @@ class BCQ(nn.Module):
 			# === Critic损失计算 ===
 			next_state = next_nobs_features
 			reward = nrewards
-			not_done = nnot_done
+			not_done = 1.0 - any_done  # [batch_size, 1]
 			
 			# 复制next_state用于目标计算
 			next_state_rep = torch.repeat_interleave(next_state, 10, 0)
@@ -312,7 +343,7 @@ class BCQ(nn.Module):
 				target_Q1, target_Q2 = self.critic_target(next_state_rep, target_actions)
 				target_Q = self.lmbda * torch.min(target_Q1, target_Q2) + (1. - self.lmbda) * torch.max(target_Q1, target_Q2)
 				target_Q = target_Q.reshape(batch_size, -1).max(1)[0].reshape(-1, 1)
-				target_Q = reward.unsqueeze(1) + (self.discount ** self.n_action_steps) * not_done[:, -1].unsqueeze(1) * target_Q
+				target_Q = reward.unsqueeze(1) + (gamma_powers[-1] * self.discount) * not_done * target_Q
 			
 			# 当前Q值计算
 			current_Q1, current_Q2 = self.critic(state, action)
@@ -323,7 +354,7 @@ class BCQ(nn.Module):
 			perturbed_actions = self.actor(state, sampled_actions)
 			actor_loss = -self.critic.q1(state, perturbed_actions).mean()
 
-			return critic_loss.item(), actor_loss.item()
+			return critic_loss.item(), actor_loss.item(), recon_loss.item(), KL_loss.item()
 	
 	def predict_action(self, obs_dict: dict) -> np.ndarray:
 		"""
@@ -371,3 +402,27 @@ class BCQ(nn.Module):
 			denorm_action = self.normalizer['action'].unnormalize(action_seq)
 			
 		return denorm_action
+	
+	def calculate_fid(self, real_actions: np.ndarray, 
+					fake_actions: np.ndarray) -> float:
+		"""
+		计算动作序列的Fréchet距离（简化版，适用于一维动作）
+		
+		Args:
+			real_actions: 真实动作序列 [N, T, D]
+			fake_actions: 生成动作序列 [N, T, D]
+			
+		Returns:
+			fid: Fréchet距离
+		"""
+		# 展平时间步和维度 [N*T*D, ]
+		real_flat = real_actions.reshape(-1)
+		fake_flat = fake_actions.reshape(-1)
+		
+		# 计算均值和标准差
+		mu_real, sigma_real = real_flat.mean(), real_flat.std()
+		mu_fake, sigma_fake = fake_flat.mean(), fake_flat.std()
+		
+		# 计算简化FID（适用于单变量高斯分布假设）
+		fid = (mu_real - mu_fake)**2 + (sigma_real**2 + sigma_fake**2 - 2*sigma_real*sigma_fake)
+		return fid
