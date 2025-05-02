@@ -39,7 +39,9 @@ def process_done(data):
 def process_next_obs(data):
     episode_ends = data['meta']['episode_ends'][:]  # 获取所有episode结束位置
     head_cam = data['data']['head_camera']  # 原始头摄像头数据
+    right_cam = data['data']['right_camera']
     next_head_cam = np.zeros_like(head_cam)  # 初始化next_head_cam
+    next_right_cam = np.zeros_like(right_cam)  # 初始化next_head_cam
     state = data['data']['state']
     next_state = np.zeros_like(state)
     
@@ -51,10 +53,12 @@ def process_next_obs(data):
         # 常规平移：当前episode内，next_head_cam[t] = head_cam[t+1]
         if end_idx - start_idx > 1:  # 确保episode长度>1
             next_head_cam[episode_slice][:-1] = head_cam[episode_slice][1:]
+            next_right_cam[episode_slice][:-1] = right_cam[episode_slice][1:]
             next_state[episode_slice][:-1] = state[episode_slice][1:]
         
         # episode最后一个时间步的next_head_cam设为0（终止状态）
         next_head_cam[end_idx - 1] = 0  # -1因为end_idx是exclusive的
+        next_right_cam[end_idx - 1] = 0  # -1因为end_idx是exclusive的
         next_state[end_idx - 1] = 0
         
         start_idx = end_idx  # 移动到下一个episode
@@ -63,10 +67,13 @@ def process_next_obs(data):
     if start_idx < len(head_cam):
         next_head_cam[start_idx:-1] = head_cam[start_idx+1:]
         next_head_cam[-1] = 0  # 整个数据集的最后一个时间步
+        next_right_cam[start_idx:-1] = right_cam[start_idx+1:]
+        next_right_cam[-1] = 0  # 整个数据集的最后一个时间步
         next_state[start_idx:-1] = state[start_idx+1:]
         next_state[-1] = 0  # 整个数据集的最后一个时间步
     
     data['data']['next_head_camera'] = next_head_cam
+    data['data']['next_right_camera'] = next_right_cam
     data['data']['next_state'] = next_state
     return data
 
@@ -112,6 +119,7 @@ def main():
                 data = pickle.load(file)
             
             head_img = data['observation']['head_camera']['rgb']
+            right_img = data['observation']['right_camera']['rgb']
             action = data['endpose']
             joint_action = data['joint_action']
             reward = data['reward']  # add reward
@@ -121,6 +129,7 @@ def main():
             cabinet_pose = np.concatenate([cabinet_pose.p, cabinet_pose.q]) # Flatten to [x, y, z, qx, qy, qz, qw]
 
             head_camera_arrays.append(head_img)
+            right_camera_arrays.append(right_img)
             action_arrays.append(action)
             state_arrays.append(joint_action)
             joint_action_arrays.append(joint_action)
@@ -139,22 +148,26 @@ def main():
     action_arrays = np.array(action_arrays)
     state_arrays = np.array(state_arrays)
     head_camera_arrays = np.array(head_camera_arrays)
+    right_camera_arrays = np.array(right_camera_arrays)
     joint_action_arrays = np.array(joint_action_arrays)
     reward_arrays = np.array(reward_arrays) # add reward
     apple_pose_arrays = np.array(apple_pose_arrays)  # 转换为numpy数组
     cabinet_pose_arrays = np.array(cabinet_pose_arrays)  # 转换为numpy数组
 
     head_camera_arrays = np.moveaxis(head_camera_arrays, -1, 1)  # NHWC -> NCHW
-
+    right_camera_arrays = np.moveaxis(right_camera_arrays, -1, 1)  # NHWC -> NCHW
+    
     compressor = zarr.Blosc(cname='zstd', clevel=3, shuffle=1)
     action_chunk_size = (100, action_arrays.shape[1])
     state_chunk_size = (100, state_arrays.shape[1])
     joint_chunk_size = (100, joint_action_arrays.shape[1])
     head_camera_chunk_size = (100, *head_camera_arrays.shape[1:])
+    right_camera_chunk_size = (100, *right_camera_arrays.shape[1:])
     reward_chunk_size = (100,)  # add reward
     apple_pose_chunk_size = (100, 7)  # apple_pose
     cabinet_pose_chunk_size = (100, 7)  # cabinet_pose
     zarr_data.create_dataset('head_camera', data=head_camera_arrays, chunks=head_camera_chunk_size, overwrite=True, compressor=compressor)
+    zarr_data.create_dataset('right_camera', data=right_camera_arrays, chunks=right_camera_chunk_size, overwrite=True, compressor=compressor)
     zarr_data.create_dataset('tcp_action', data=action_arrays, chunks=action_chunk_size, dtype='float32', overwrite=True, compressor=compressor)
     zarr_data.create_dataset('state', data=state_arrays, chunks=state_chunk_size, dtype='float32', overwrite=True, compressor=compressor)
     zarr_data.create_dataset('action', data=joint_action_arrays, chunks=joint_chunk_size, dtype='float32', overwrite=True, compressor=compressor)

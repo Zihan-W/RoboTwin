@@ -158,8 +158,8 @@ class RLRobotImageDataset(BaseImageDataset):
         self.replay_buffer = ReplayBuffer.copy_from_path(
             zarr_path,
             # keys=['head_camera', 'front_camera', 'left_camera', 'right_camera', 'state', 'action'],
-            keys=['head_camera', 'state', 'action', 'apple_pose', 
-                  'cabinet_pose', 'reward', 'done', 'next_head_camera', 'next_state']
+            keys=['head_camera', 'right_camera', 'state', 'action', 'apple_pose', 
+                  'cabinet_pose', 'reward', 'done', 'next_head_camera', 'next_right_camera',  'next_state']
         )
             
         val_mask = get_val_mask(
@@ -218,6 +218,7 @@ class RLRobotImageDataset(BaseImageDataset):
         normalizer['left_cam'] = get_image_range_normalizer()
         normalizer['right_cam'] = get_image_range_normalizer()
         normalizer['next_head_cam'] = get_image_range_normalizer()
+        normalizer['next_right_cam'] = get_image_range_normalizer()
         return normalizer
 
     def __len__(self) -> int:
@@ -228,20 +229,22 @@ class RLRobotImageDataset(BaseImageDataset):
         next_agent_pos = sample['next_state'].astype(np.float32) # (agent_posx2, block_posex3)
         head_cam = np.moveaxis(sample['head_camera'],-1,1)/255
         next_head_cam = np.moveaxis(sample['next_head_cam'],-1,1)/255
+        next_right_cam = np.moveaxis(sample['next_right_cam'],-1,1)/255
         # front_cam = np.moveaxis(sample['front_camera'],-1,1)/255
         # left_cam = np.moveaxis(sample['left_camera'],-1,1)/255
-        # right_cam = np.moveaxis(sample['right_camera'],-1,1)/255
+        right_cam = np.moveaxis(sample['right_camera'],-1,1)/255
 
         data = {
             'obs': {
                 'head_cam': head_cam, # T, 3, H, W
                 # 'front_cam': front_cam, # T, 3, H, W
                 # 'left_cam': left_cam, # T, 3, H, W
-                # 'right_cam': right_cam, # T, 3, H, W
+                'right_cam': right_cam, # T, 3, H, W
                 'agent_pos': agent_pos, # T, D
             },
             'next_obs':{
                 'head_cam': next_head_cam, # T, 3, H, W
+                'right_cam': next_right_cam, # T, 3, H, W
                 'agent_pos': next_agent_pos, # T, D
             },
             'action': sample['action'].astype(np.float32), # T, D
@@ -272,9 +275,10 @@ class RLRobotImageDataset(BaseImageDataset):
         head_cam = samples['head_camera'].to(device, non_blocking=True) / 255.0
         next_agent_pos = samples['next_state'].to(device, non_blocking=True)
         next_head_cam = samples['next_head_camera'].to(device, non_blocking=True) / 255.0
+        next_right_cam = samples['next_right_camera'].to(device, non_blocking=True) / 255.0
         # front_cam = samples['front_camera'].to(device, non_blocking=True) / 255.0
         # left_cam = samples['left_camera'].to(device, non_blocking=True) / 255.0
-        # right_cam = samples['right_camera'].to(device, non_blocking=True) / 255.0
+        right_cam = samples['right_camera'].to(device, non_blocking=True) / 255.0
         action = samples['action'].to(device, non_blocking=True)
         apple_pose = samples['apple_pose'].to(device, non_blocking=True)
         cabinet_pose = samples['cabinet_pose'].to(device, non_blocking=True)
@@ -285,11 +289,12 @@ class RLRobotImageDataset(BaseImageDataset):
                 'head_cam': head_cam, # B, T, 3, H, W
                 # 'front_cam': front_cam, # B, T, 3, H, W
                 # 'left_cam': left_cam, # B, T, 3, H, W
-                # 'right_cam': right_cam, # B, T, 3, H, W
+                'right_cam': right_cam, # B, T, 3, H, W
                 'agent_pos': agent_pos, # B, T, D
             },
             'next_obs':{
                 'head_cam': next_head_cam, # T, 3, H, W
+                'right_cam': next_right_cam, # T, 3, H, W
                 'agent_pos': next_agent_pos, # T, D
             },
             'action': action, # B, T, D
