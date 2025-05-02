@@ -108,7 +108,6 @@ class BehaviorCloningPolicy(nn.Module):
         start = To - 1
         end = start + self.n_action_steps
         action = action_pred[:,start:end]
-
         return {
             'action': action,
             'action_pred': action_pred   # 返回完整序列

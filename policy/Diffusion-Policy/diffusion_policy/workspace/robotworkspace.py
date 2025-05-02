@@ -253,7 +253,7 @@ class RobotWorkspace(BaseWorkspace):
                         gt_action = batch['action']
                         
                         result = policy.predict_action(obs_dict)
-                        pred_action = result['action_pred']
+                        pred_action = result['action']
                         mse = torch.nn.functional.mse_loss(pred_action, gt_action)
                         step_log['train_action_mse_error'] = mse.item()
                         del batch
@@ -381,16 +381,16 @@ class BCRobotWorkspace(BaseWorkspace):
         env_runner = None
 
         # # configure logging
-        # wandb_run = wandb.init(
-        #     dir=str(self.output_dir),
-        #     config=OmegaConf.to_container(cfg, resolve=True),
-        #     **cfg.logging
-        # )
-        # wandb.config.update(
-        #     {
-        #         "output_dir": self.output_dir,
-        #     }
-        # )
+        wandb_run = wandb.init(
+            dir=str(self.output_dir),
+            config=OmegaConf.to_container(cfg, resolve=True),
+            **cfg.logging
+        )
+        wandb.config.update(
+            {
+                "output_dir": self.output_dir,
+            }
+        )
 
         # configure checkpoint
         topk_manager = TopKCheckpointManager(
@@ -543,14 +543,14 @@ class BCRobotWorkspace(BaseWorkspace):
                 current_time = time.time()
                 step_log['total_elapsed_time'] = current_time - training_start_time
                 json_logger.log(step_log)
-                # if wandb_run is not None:  # 确保wandb已初始化
-                #     wandb.log(step_log)    # 新增这行
+                if wandb_run is not None:  # 确保wandb已初始化
+                    wandb.log(step_log)    # 新增这行
                 self.global_step += 1
                 self.epoch += 1
             total_time = time.time() - training_start_time
-            # if wandb_run is not None:
-            #     wandb.log({'final_total_time': total_time})
-            #     wandb.finish()
+            if wandb_run is not None:
+                wandb.log({'final_total_time': total_time})
+                wandb.finish()
 
 class MLPAgentRobotWorkspace(BaseWorkspace):    # TODO: 暂时不能正常运行
     include_keys = ['global_step', 'epoch']
