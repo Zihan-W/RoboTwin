@@ -1,11 +1,10 @@
+
 from .base_task import Base_task
 from .utils import *
-import wandb
 import sapien
-import open3d as o3d
-from .utils import *
+import wandb
 
-# wandb_run = wandb.init(project="test_put_apple_cabinet_rl")
+# wandb_run = wandb.init(project="test_dual_bottles_pick_rl")
 
 class CurriculumManager:
     """课程学习管理器"""
@@ -13,15 +12,12 @@ class CurriculumManager:
         self.current_curriculum_stage = 0  # 当前课程阶段
         self.stage_proficiency = [0.0] * total_stages  # 各阶段熟练度
         self.stage_thresholds = [
-            {'pos': 0.04, 'rot': 0.06},  # 阶段0阈值
-            {'pos': 0.02, 'rot': 0.06},
-            {'pos': 0.04, 'rot': 0.06},
-            {'pos': 0.04, 'rot': 0.06},
-            {'pos': 0.04, 'rot': 0.06},
-            {'pos': 0.02, 'rot': 0.06},
-            {'pos': 0.04, 'rot': 0.06},
-            {'pos': 0.04, 'rot': 0.06},
-            {'pos': 0.04, 'rot': 0.06}
+            {'pos': 0.1, 'rot': 0.06},  # 阶段0阈值
+            {'pos': 0.1, 'rot': 0.06},
+            {'pos': 0.06, 'rot': 0.06},
+            {'pos': 0.06, 'rot': 0.06},
+            {'pos': 0.06, 'rot': 0.06},
+            {'pos': 0.06, 'rot': 0.06},
         ]
             
     def get_current_threshold(self, stage):
@@ -32,16 +28,12 @@ class GripperManager:
     def __init__(self) -> None:
         self.stage_gripper_policy = {
             # 阶段 | 左爪期望状态 | 右爪期望状态
-            0: ('open', 'open'),    # 双爪闭合准备抓取
-            1: ('open', 'open'),    # 保持抓取状态
-            2: ('open', 'open'),    # 完成抓取
-            3: ('closed', 'closed'),    # 搬运过程保持
-            4: ('closed', 'closed'),    # 保持搬运状态
-            5: ('closed', 'closed'),    # 准备放置
-            6: ('closed', 'closed'),            # 右爪必须张开释放
-            7: ('closed', 'open'),    # 复位闭合
-            8: ('closed', 'open'),     # 保持复位状态
-            9: ('closed', 'open'),
+            0: ('open', 'open'),    # 双爪打开准备抓取
+            1: ('open', 'open'),    # 贴近物体准备抓取
+            2: ('closed', 'closed'),    # 抓取
+            3: ('closed', 'closed'),    # 上升
+            4: ('closed', 'closed'),    # 到指定位置
+            5: ('closed', 'closed'),    # 到指定位置
         }
         self.GRIPPER_PENALTY = 0.03  # 基础惩罚值
         self.EXPECTED_TOLERANCE = 0.004  # 动作判定容差
@@ -85,7 +77,7 @@ class GripperManager:
         return gripper_penalty
 
 class StageTracker:
-    def __init__(self, cabinet_pos, apple_pose):
+    def __init__(self, red_bottle_pos, green_bottle_pos):
         # Init CurriculumManager
         self.curriculum = CurriculumManager()
         self.gripper_manager = GripperManager()
@@ -98,7 +90,8 @@ class StageTracker:
         self.right_endpose = 0
 
         # Initialize cabinet_pos
-        self.cabinet_pos = cabinet_pos
+        self.init_red_bottle_pos = red_bottle_pos
+        self.init_green_bottle_pos = green_bottle_pos
 
         # Initialize tcp to target distance
         self.left_endpose_distance = .0
@@ -107,25 +100,33 @@ class StageTracker:
         self.right_endpose_rot = .0
 
         # Initialize target poses
-        self.left_target_pose = list(cabinet_pos + [-0.054, -0.37, -0.09]) + [0.5, 0.5, 0.5, 0.5]
-        self.right_target_pose = list(apple_pose + [0, 0, 0.17]) + [-0.5, 0.5, -0.5, -0.5]
+        self.left_target_pose0 = list(self.init_red_bottle_pos + [-0.14,-0.18,0]) + [-0.906,0,0,-0.424]
+        self.right_target_pose0 = list(self.init_green_bottle_pos + [0.14,-0.18,0]) + [-0.415,0,0,-0.910]
+        self.left_target_pose1 = list(self.init_red_bottle_pos + [-0.08,-0.11,0]) + [-0.906,0,0,-0.424]
+        self.right_target_pose1 = list(self.init_green_bottle_pos + [0.1,-0.11,0]) + [-0.415,0,0,-0.910]
+        self.left_target_pose2 = self.left_target_pose1
+        self.left_target_pose2[2] += 0.08
+        self.right_target_pose2 = self.right_target_pose1
+        self.right_target_pose2[2] += 0.08
+        self.left_target_pose3 = [-0.19,-0.12,0.92,1,0,0,0]
+        self.right_target_pose3 = [0.19,-0.12,0.92,-0.01,0.01,0.03,-1]
 
     def stage_complete(self):
         '''
         判断当前阶段是否完成，并步进到下一个stage
-        一共有0~9共10个状态
+        一共有0~4共5个状态
         '''
         thresholds = self.curriculum.get_current_threshold(self.stage)
         if self.left_endpose_distance < thresholds['pos'] \
-                and self.right_endpose_distance < thresholds['pos'] \
-                and self.left_endpose_rot < thresholds['rot'] \
-                and self.right_endpose_rot < thresholds['rot']:
+                and self.right_endpose_distance < thresholds['pos']:
+                # and self.left_endpose_rot < thresholds['rot'] \
+                # and self.right_endpose_rot < thresholds['rot']:
             self.stage += 1
             return True
         else:
             return False
         
-    def calculate_approach_reward(self, pos_scale=0.2, rot_scale=0.2, time_penalty=0.006): 
+    def calculate_approach_reward(self, pos_scale=0.2, rot_scale=0.0, time_penalty=0.006): 
         '''
         计算接近奖励，引导tcp向目标点接近
         参数：
@@ -141,15 +142,16 @@ class StageTracker:
         # pos_reward = np.exp(-0.5 * pos_diff)  # 0.5为衰减系数
         # rot_reward = np.exp(-1.0 * rot_diff)  # 姿态精度要求更高
         reward = pos_scale * pos_reward + rot_scale * rot_reward - time_penalty 
+        
         # wandb_run.log({"pos_diff": pos_diff})
         # wandb_run.log({"rot_diff": rot_diff})
         # wandb_run.log({"approach_reward": reward})       
         return reward
 
-    def calculate_grasp_reward(self, apple_pose, right_endpose):
+    def calculate_grasp_reward(self, target_pose, endpose):
         # 设置参数
         threshold = 0.03
-        if np.linalg.norm(apple_pose + [0,0,0.12] - right_endpose.p) < threshold:
+        if np.linalg.norm(target_pose - endpose.p) < threshold:
             reward = 0.05
             return reward
         else:
@@ -176,9 +178,9 @@ class StageTracker:
         # 步骤 1: 将目标四元数从世界坐标系转换到基坐标系
         # 假设存在基坐标系到世界坐标系的旋转四元数 base_to_world_quat
         if is_left:
-            base_to_world_quat = [0.0, 0.0, 0.0, 1.0]  # 示例值，需根据实际坐标系调整
-        else:
             base_to_world_quat = [0.0, 0.0, 1.0, 0.0]  # 示例值，需根据实际坐标系调整
+        else:
+            base_to_world_quat = [1.0, 0.0, 0.0, 0.0]  # 示例值，需根据实际坐标系调整
         world_to_base_quat = self.quaternion_conjugate(base_to_world_quat)
         
         # 步骤2：将目标四元数转换到基坐标系
@@ -196,32 +198,33 @@ class StageTracker:
         dot = np.clip(np.dot(q1_adjusted, q2_adjusted), -1.0, 1.0)
         return np.arccos(dot) * 2
 
-    def update_stage_reward(self, left_endpose, right_endpose,left_gripper_val,right_gripper_val,apple_pose):
-        # TODO：抓起来苹果
+    def update_stage_reward(self, left_endpose, right_endpose,left_gripper_val,right_gripper_val, red_bottle_pos, green_bottle_pos):
         # left_target_pose[x,y,z,qw,qx,qy,qz]
         # left_endpose.q 
         self.left_endpose = left_endpose
         self.right_endpose = right_endpose
-        self.left_endpose_distance = np.linalg.norm(np.array(self.left_target_pose[:3]) - np.array(self.left_endpose.p))
-        self.right_endpose_distance = np.linalg.norm(np.array(self.right_target_pose[:3]) - np.array(self.right_endpose.p))
-        self.left_endpose_rot = self.quaternion_angle_diff(self.left_target_pose[3:], self.left_endpose.q, is_left=True)  # 四元数夹角
-        self.right_endpose_rot = self.quaternion_angle_diff(self.right_target_pose[3:], self.right_endpose.q, is_left=False)  # 四元数夹角
         step_reward = 0
         STAGE_BONUS = 0.1
         gripper_penalty = self.gripper_manager.get_current_penalty(self.stage, left_gripper_val, right_gripper_val)
-        # 一共有9个动作
+        # 一共有5个动作
         if self.stage == 0:
+            self.left_endpose_distance = np.linalg.norm(np.array(self.left_target_pose0[:3]) - np.array(self.left_endpose.p))
+            self.right_endpose_distance = np.linalg.norm(np.array(self.right_target_pose0[:3]) - np.array(self.right_endpose.p))
+            self.left_endpose_rot = self.quaternion_angle_diff(self.left_target_pose0[3:], self.left_endpose.q, is_left=True)  # 四元数夹角
+            self.right_endpose_rot = self.quaternion_angle_diff(self.right_target_pose0[3:], self.right_endpose.q, is_left=False)  # 四元数夹角
             # 计算step_reward，奖励引导机器人向指定点运动
-            # 左tcp移动到柜子前，右tcp移动到苹果上方，则认为阶段0结束
-            # 阶段0进入到阶段1，给与阶段奖励，并更新target_pose
+            # 左tcp移动到红色瓶子前，右tcp移动到绿色瓶子前，则认为阶段0结束
+            # 阶段0进入到阶段1，给与阶段奖励
             step_reward += self.calculate_approach_reward()
             if self.stage_complete():
                 step_reward += STAGE_BONUS
-                self.left_target_pose[1] += 0.09
-                self.right_target_pose[2] -= 0.05
         elif self.stage == 1:
+            self.left_endpose_distance = np.linalg.norm(np.array(self.left_target_pose1[:3]) - np.array(self.left_endpose.p))
+            self.right_endpose_distance = np.linalg.norm(np.array(self.right_target_pose1[:3]) - np.array(self.right_endpose.p))
+            self.left_endpose_rot = self.quaternion_angle_diff(self.left_target_pose1[3:], self.left_endpose.q, is_left=True)  # 四元数夹角
+            self.right_endpose_rot = self.quaternion_angle_diff(self.right_target_pose1[3:], self.right_endpose.q, is_left=False)  # 四元数夹角
             # 计算step_reward，奖励引导机器人向指定点运动
-            # 左tcp移动到柜子把手处，右tcp移动到苹果处，则认为阶段1结束
+            # 左tcp前进到抓取位姿，右tcp前进到抓取位姿，则认为阶段1结束
             # 阶段1进入到阶段2，给与阶段奖励，并更新target_pose
             step_reward += self.calculate_approach_reward()
             if self.stage_complete():
@@ -231,190 +234,141 @@ class StageTracker:
             # 左右tcp夹紧，则认为阶段2结束
             # 阶段2进入到阶段3，给与阶段奖励，并更新target_pose
             step_reward += self.calculate_approach_reward()
-            if left_gripper_val <= -0.016 and right_gripper_val <= 0.002:
+            if left_gripper_val <= 0 and right_gripper_val <= 0:
                 self.stage += 1
                 step_reward += STAGE_BONUS
-                self.left_target_pose[1] -= 0.18
-                self.right_target_pose[2] += 0.18
         elif self.stage == 3:
+            self.left_endpose_distance = np.linalg.norm(np.array(self.left_target_pose2[:3]) - np.array(self.left_endpose.p))
+            self.right_endpose_distance = np.linalg.norm(np.array(self.right_target_pose2[:3]) - np.array(self.right_endpose.p))
+            self.left_endpose_rot = self.quaternion_angle_diff(self.left_target_pose2[3:], self.left_endpose.q, is_left=True)  # 四元数夹角
+            self.right_endpose_rot = self.quaternion_angle_diff(self.right_target_pose2[3:], self.right_endpose.q, is_left=False)  # 四元数夹角
             # 计算step_reward，奖励引导机器人拉出抽屉和举起苹果
             # 左tcp将抽屉拉开，右tcp将苹果举起来，则认为阶段3结束
             # 这里只判断位置，抽屉是否被拉开或苹果是否被举起，由reward参与判断
             # 阶段3进入到阶段4，给与阶段奖励，并更新target_pose
             step_reward += self.calculate_approach_reward()
-            step_reward += self.calculate_grasp_reward(apple_pose,right_endpose)
+            step_reward += self.calculate_grasp_reward(red_bottle_pos,left_endpose)
+            step_reward += self.calculate_grasp_reward(green_bottle_pos,right_endpose)
             if self.stage_complete():
                 step_reward += STAGE_BONUS
-                self.right_target_pose[1] = self.cabinet_pos[1] - 0.216
         elif self.stage == 4:
+            self.left_endpose_distance = np.linalg.norm(np.array(self.left_target_pose3[:3]) - np.array(self.left_endpose.p))
+            self.right_endpose_distance = np.linalg.norm(np.array(self.right_target_pose3[:3]) - np.array(self.right_endpose.p))
+            self.left_endpose_rot = self.quaternion_angle_diff(self.left_target_pose3[3:], self.left_endpose.q, is_left=True)  # 四元数夹角
+            self.right_endpose_rot = self.quaternion_angle_diff(self.right_target_pose3[3:], self.right_endpose.q, is_left=False)  # 四元数夹角
             # 计算step_reward，奖励引导机器人向指定点运动
             # 右tcp平移到一定位置（向前），则认为阶段4结束
             # 阶段4进入到阶段5，给与阶段奖励，并更新target_pose
             step_reward += self.calculate_approach_reward()
-            step_reward += self.calculate_grasp_reward(apple_pose,right_endpose)
+            step_reward += self.calculate_grasp_reward(red_bottle_pos,left_endpose)
+            step_reward += self.calculate_grasp_reward(green_bottle_pos,right_endpose)
             if self.stage_complete():
                 step_reward += STAGE_BONUS
-                self.right_target_pose = list(self.cabinet_pos+[0.036,-0.216,0.078]) + [-0.5,0.5,-0.5,-0.5]
-        elif self.stage == 5:
-            # 计算step_reward，奖励引导机器人向指定点运动
-            # 右tcp平移到一定位置（靠近抽屉），则认为阶段5结束
-            # 阶段5进入到阶段6，给与阶段奖励，并更新target_pose
-            step_reward += self.calculate_approach_reward()
-            step_reward += self.calculate_grasp_reward(apple_pose,right_endpose)
-            if self.stage_complete():
-                step_reward += STAGE_BONUS
-                pass
-        elif self.stage == 6:
-            # 计算step_reward，奖励引导机器人将苹果放入抽屉
-            # 右tcp夹爪打开，则认为阶段6结束
-            # 阶段6进入到阶段7，给与阶段奖励，并更新target_pose（实际上是回到状态5的初始位置，即状态4的末位置）
-            step_reward += self.calculate_approach_reward()
-            if right_gripper_val >= 0.043:
-                self.stage += 1
-                step_reward += STAGE_BONUS
-                self.right_target_pose = list(self.cabinet_pos+[0.036,-0.216,0.078]) + [-0.5,0.5,-0.5,-0.5]
-        elif self.stage == 7:
-            # 计算step_reward，奖励引导机器人向指定点运动
-            # 右tcp平移到一定位置（远离抽屉），则认为阶段6结束
-            # 阶段6进入到阶段7，给与阶段奖励，并更新target_pose
-            step_reward += self.calculate_approach_reward()
-            if self.stage_complete():
-                step_reward += STAGE_BONUS
-                self.left_target_pose[1] += 0.18
-                self.right_target_pose = [0.3,-0.32,0.935,0.707,-0.707,0,0]  # right_original_pose
-        elif self.stage == 8:
-            # 计算step_reward，奖励引导机器人向指定点运动
-            # 左tcp平移到一定为止，给与阶段奖励，右tcp回到初始位置，则认为阶段7结束
-            step_reward += self.calculate_approach_reward()
-            if self.stage_complete():
-                step_reward += STAGE_BONUS
-                pass
         curriculum_bonus = 0.1 * (self.stage + 1)
         return step_reward + curriculum_bonus - gripper_penalty, self.stage
 
-class put_apple_cabinet_rl(Base_task):
+
+class dual_bottles_pick_easy_rl(Base_task):
     def setup_demo(self,**kwags):
-        super()._init(**kwags,table_static=False)
+        super()._init(**kwags)
         self.create_table_and_wall()
         self.load_robot()
         self.setup_planner()
         self.load_camera()
         self.pre_move()
         self.load_actors()
-        self.step_lim = 600
+        self.step_lim = 400
 
         self.reward = 0
 
-        _cabinet_pos = self.cabinet.get_pose().p
-        _apple_pose = self.apple.get_pose().p
-        self.stage_tracker = StageTracker(_cabinet_pos, _apple_pose)
-
+        _red_bottle_pos = self.red_bottle.get_pose().p
+        _green_bottle_pos = self.green_bottle.get_pose().p
+        self.stage_tracker = StageTracker(_red_bottle_pos, _green_bottle_pos)
+    
     def pre_move(self):
         render_freq = self.render_freq
         self.render_freq=0
+
+        self.together_close_gripper(save_freq=None)
         self.together_open_gripper(save_freq=None)
+
         self.render_freq = render_freq
-    
+
     def load_actors(self):
-        self.cabinet, _ = rand_create_urdf_obj(
+        # super().setup_scene()
+        self.red_bottle,_ = rand_create_glb(
             self.scene,
-            modelname="036_cabine",
-            xlim=[0,0],
-            ylim=[0.155,0.155],
-            zlim=[0.96],
+            xlim=[-0.20,-0.10],
+            ylim=[0.08,0.18],
+            zlim=[0.865],
+            modelname="001_bottles",
             rotate_rand=False,
-            qpos=[1,0,0,1],
-            scale=0.27
+            qpos=[0.707,0.707,0,0],
+            scale=(0.132,0.132,0.132),
+            model_id=13
         )
 
-        self.cabinet_active_joints = self.cabinet.get_active_joints()
-        for joint in self.cabinet_active_joints:
-            # set stiffness to 0 to avoid restoring elastic force
-            joint.set_drive_property(stiffness=0, damping=5, force_limit=1000, mode="force")
-        self.cabinet_all_joints = self.cabinet.get_joints()
-
-        # self.apple,_ = rand_create_obj(
-        #     self.scene,
-        #     xlim=[0.2,0.32],
-        #     ylim=[-0.2,-0.1],
-        #     zlim=[0.78],
-        #     modelname="035_apple",
-        #     rotate_rand=False,
-        #     convex=True
-        # )
-
-        self.apple,_ = rand_create_obj(
+        self.green_bottle, _=rand_create_glb(
             self.scene,
-            xlim=[0.20,0.20],
-            ylim=[-0.18,-0.18],
-            zlim=[0.78],
-            modelname="035_apple",
+            xlim=[0.10,0.20],
+            ylim=[0.08,0.19],
+            zlim=[0.865],
+            modelname="001_bottles",
             rotate_rand=False,
-            convex=True
+            # qpos=[0.709,0.705,0.015,0.015],
+            qpos=[0.707,0.707,0,0],
+            scale=(0.161,0.161,0.161),
+            model_id=16
         )
-        
-        self.apple.find_component_by_type(sapien.physx.PhysxRigidDynamicComponent).mass = 0.01
-        
+
+        self.red_bottle.find_component_by_type(sapien.physx.PhysxRigidDynamicComponent).mass = 0.01
+        self.green_bottle.find_component_by_type(sapien.physx.PhysxRigidDynamicComponent).mass = 0.01
+
+        render_freq = self.render_freq
+        self.render_freq = 0
+        for _ in range(4):
+            self.together_open_gripper(save_freq=None)
+        self.render_freq = render_freq
+
     def play_once(self):
-        # 执行运动相关的函数，together_follow_path函数与set_gripper函数与left_follow_path与right_follow_path函数会被调用
-        # 这些函数被调用时，会执行_take_picture函数，保存pkl格式数据集
-        # 现有数据集结构:
-        # ├─ data [Group]
-        #   ├─ action [Array] (6190, 14) float32    ## data['joint_action']，是agent的state记录
-        #   ├─ head_camera [Array] (6190, 3, 240, 320) uint8    ## data['observation']['head_camera']['rgb']
-        #   ├─ state [Array] (6190, 14) float32     ## data['joint_action']，是agent的state记录
-        #   ├─ tcp_action [Array] (6190, 14) float32      ## data['endpose']，是agent的tcp的state记录
-        # ├─ meta [Group]
-        #   ├─ episode_ends [Array] (20,) int64
-        # 该数据集训练的是下一步机器人应该到哪个pos，TODO：或许可以改为增量输出，则数据集中应该有基于当前state采取的action数据
-        # 增加并设计compute_reward函数，以计算reward
-        # 修改_take_picture函数，可以保存part_poses(包括cabinet和apple的pose)、reward（调用compute_reward函数计算）
-        # 修改修改script/pkl2zarr_rl.py，可以处理含reward、apple_pose和cabinet_pose的数据集
-        pose0 = list(self.cabinet.get_pose().p+[-0.054,-0.37,-0.09])+[0.5,0.5,0.5,0.5]
-        pose1 = list(self.apple.get_pose().p+[0,0,0.17])+[-0.5,0.5,-0.5,-0.5]
-        self.together_move_to_pose_with_screw(left_target_pose=pose0,right_target_pose=pose1)
-        pose0[1] +=0.09
-        pose1[2] -= 0.05
-        self.together_move_to_pose_with_screw(left_target_pose=pose0,right_target_pose=pose1)
-
-        self.together_close_gripper(left_pos=-0.02)
-        pose0[1]-=0.18
-        pose1[2]+=0.18
-        self.together_move_to_pose_with_screw(left_target_pose=pose0,right_target_pose=pose1)
-        pose2 = list(self.cabinet.get_pose().p+[0.036,-0.216,0.078]) + [-0.5,0.5,-0.5,-0.5]
-        pose1[1] = pose2[1]
-        self.right_move_to_pose_with_screw(pose1)
-        self.right_move_to_pose_with_screw(pose2)
-
-        self.open_right_gripper()
-        pose2[2]+=0.082
-        self.right_move_to_pose_with_screw(pose1)
-        pose0[1]+=0.18
-
-        self.together_move_to_pose_with_screw(left_target_pose=pose0,right_target_pose=self.right_original_pose)
+        left_pose0 = list(self.red_bottle.get_pose().p+[-0.14,-0.18,0])+[-0.906,0,0,-0.424]
+        right_pose0 = list(self.green_bottle.get_pose().p+[0.14,-0.18,0])+[-0.415,0,0,-0.910]
+        left_pose1 = list(self.red_bottle.get_pose().p+[-0.08,-0.11,0])+[-0.906,0,0,-0.424]
+        right_pose1 = list(self.green_bottle.get_pose().p+[0.1,-0.11,0])+[-0.415,0,0,-0.910]
+        left_target_pose = [-0.19,-0.12,0.92,1,0,0,0]
+        right_target_pose = [0.19,-0.12,0.92,-0.01,0.01,0.03,-1]
         
+        self.together_move_to_pose_with_screw(left_pose0,right_pose0)
+        self.together_move_to_pose_with_screw(left_pose1,right_pose1)
+        self.together_close_gripper()
+        left_pose1[2]+=0.08
+        right_pose1[2]+=0.08
+        self.together_move_to_pose_with_screw(left_pose1,right_pose1)
+        self.together_move_to_pose_with_screw(left_target_pose,right_target_pose)
+
     def check_success(self):
-        cabinet_pos = self.cabinet.get_pose().p
-        apple_pose = self.apple.get_pose().p
-        left_endpose = self.get_left_endpose_pose()
-        target_pose = (cabinet_pos + np.array([-0.05,-0.27,-0.09])).tolist() + [0.5, -0.5, -0.5, 0.5]
-        eps1 = 0.03
-        tag = np.all(abs(apple_pose[:2] - np.array([0.01, 0.1])) < np.array([0.015,0.015]))
-        return np.abs(apple_pose[2] - 0.797) < 0.015 and tag and\
-               np.all(abs(np.array(left_endpose.p.tolist() + left_endpose.q.tolist()) - target_pose) < eps1)
+        red_target = [-0.046,-0.105]
+        green_target = [0.057,-0.105]
+        eps = 0.03
+        red_bottle_pose = self.red_bottle.get_pose().p
+        green_bottle_pose = self.green_bottle.get_pose().p
+        if red_bottle_pose[2] < 0.78 or green_bottle_pose[2] < 0.78:
+            self.actor_pose = False
+        return abs(red_bottle_pose[0]-red_target[0])<eps and abs(red_bottle_pose[1]-red_target[1])<eps and red_bottle_pose[2]>0.9 and \
+               abs(green_bottle_pose[0]-green_target[0])<eps and abs(green_bottle_pose[1]-green_target[1])<eps and green_bottle_pose[2]>0.9
 
     def compute_reward(self):
         # cabinet的pose不会改变，而apple的pose会随着apple的运动而改变
         # get_left_endpose_pose得到的格式：Pose([x,y,z],[q1,q2,q3,q4])
         # 输入控制器的pose格式：[x,y,z,q1,q2,q3,q4]
-        cabinet_pos = self.cabinet.get_pose().p
-        apple_pose = self.apple.get_pose().p
         left_endpose = self.get_left_endpose_pose()
         right_endpose = self.get_right_endpose_pose()
         left_gripper_val = self.left_gripper_val
         right_gripper_val = self.right_gripper_val
+        red_bottle_pos = self.red_bottle.get_pose().p
+        green_bottle_pos = self.green_bottle.get_pose().p
         # 更新self.state
-        step_reward, state = self.stage_tracker.update_stage_reward(left_endpose,right_endpose,left_gripper_val,right_gripper_val, apple_pose)
+        step_reward, state = self.stage_tracker.update_stage_reward(left_endpose,right_endpose,left_gripper_val,right_gripper_val, red_bottle_pos, green_bottle_pos)
         self.reward += step_reward
         
         # wandb记录
@@ -547,9 +501,9 @@ class put_apple_cabinet_rl(Base_task):
             "cam2world_gl" : right_camera_model_matrix
         }
 
-        pkl_dic["apple_pose"] = self.apple.get_pose()
+        pkl_dic["red_bottle_pose"] = self.red_bottle.get_pose()
 
-        pkl_dic["cabinet_pose"] = self.cabinet.get_pose()
+        pkl_dic["green_bottle_pose"] = self.green_bottle.get_pose()
         
         pkl_dic["reward"] = self.compute_reward()
 

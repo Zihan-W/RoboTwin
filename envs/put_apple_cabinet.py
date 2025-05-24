@@ -38,10 +38,28 @@ class put_apple_cabinet(Base_task):
             joint.set_drive_property(stiffness=0, damping=5, force_limit=1000, mode="force")
         self.cabinet_all_joints = self.cabinet.get_joints()
 
+        # self.apple,_ = rand_create_obj(
+        #     self.scene,
+        #     xlim=[0.2,0.32],
+        #     ylim=[-0.2,-0.1],
+        #     zlim=[0.78],
+        #     modelname="035_apple",
+        #     rotate_rand=False,
+        #     convex=True
+        # )
+        # self.apple,_ = rand_create_obj(
+        #     self.scene,
+        #     xlim=[0.20,0.25],
+        #     ylim=[-0.15,-0.10],
+        #     zlim=[0.78],
+        #     modelname="035_apple",
+        #     rotate_rand=False,
+        #     convex=True
+        # )
         self.apple,_ = rand_create_obj(
             self.scene,
-            xlim=[0.2,0.32],
-            ylim=[-0.2,-0.1],
+            xlim=[0.20,0.20],
+            ylim=[-0.18,-0.18],
             zlim=[0.78],
             modelname="035_apple",
             rotate_rand=False,

@@ -127,9 +127,9 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         """
         assert 'past_action' not in obs_dict # not implemented yet
         # normalize input
-        nobs = self.normalizer.normalize(obs_dict)
-        value = next(iter(nobs.values()))
-        B, To = value.shape[:2]
+        nobs = self.normalizer.normalize(obs_dict)  # batch_size, horizon, channels, H(height), W(width)
+        value = next(iter(nobs.values()))   
+        B, To = value.shape[:2] # batch_size, horizon
         T = self.horizon
         Da = self.action_dim
         Do = self.obs_feature_dim
@@ -144,11 +144,10 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         global_cond = None
         if self.obs_as_global_cond:
             # condition through global feature
-            this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
-            # ipdb> this_nobs["head_cam"].shape  torch.Size([96, 3, 240, 320])
-            nobs_features = self.obs_encoder(this_nobs) # torch.Size([96, 526])
+            this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))   # batch_size*n_obs_steps, channels, H(height), W(width)
+            nobs_features = self.obs_encoder(this_nobs) # batch_size*n_obs_steps, obs_dim
             # reshape back to B, Do
-            global_cond = nobs_features.reshape(B, -1)
+            global_cond = nobs_features.reshape(B, -1)  # batch_size, n_obs_steps * obs_dim
             # empty data for action
             cond_data = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
             cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
@@ -164,6 +163,7 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
             cond_mask[:,:To,Da:] = True
 
         # run sampling
+        # batch_size, horizon, action_dim
         nsample = self.conditional_sample(
             cond_data, 
             cond_mask,
@@ -172,12 +172,12 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
             **self.kwargs)
         
         # unnormalize prediction
-        naction_pred = nsample[...,:Da] # torch.Size([32, 8, 14]) batch_size, n_action_steps, action_dim
+        naction_pred = nsample[...,:Da] # batch_size, horizon, action_dim
         action_pred = self.normalizer['action'].unnormalize(naction_pred)
 
         # get action
-        start = To - 1
-        end = start + self.n_action_steps
+        start = To - 1  # n_obs_steps-1
+        end = start + self.n_action_steps   # n_action_steps + n_obs_steps-1
         action = action_pred[:,start:end]
         
         result = {
@@ -193,8 +193,8 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
     def compute_loss(self, batch):
         # normalize input
         assert 'valid_mask' not in batch
-        nobs = self.normalizer.normalize(batch['obs'])  # torch.Size([32, 4, 3, 240, 320]) batch_size, channels, n_obs_steps, H(height), W(width)
-        nactions = self.normalizer['action'].normalize(batch['action']) # torch.Size([32, 4, 14]) batch_szie, horzion, action_dim
+        nobs = self.normalizer.normalize(batch['obs'])  # batch_size, horizon, channels, H(height), W(width)
+        nactions = self.normalizer['action'].normalize(batch['action']) # batch_szie, horizon, action_dim
         batch_size = nactions.shape[0]
         horizon = nactions.shape[1]
 
@@ -207,10 +207,10 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
             # reshape B, T, ... to B*T
             this_nobs = dict_apply(nobs, 
                 lambda x: x[:,:self.n_obs_steps,...].reshape(-1,*x.shape[2:]))
-            # ipdb> this_nobs["head_cam"].shape torch.Size([96, 3, 240, 320]) # batch_size * n_obs_steps, channels, H, W
-            nobs_features = self.obs_encoder(this_nobs)
+            # batch_size * n_obs_steps, channels, H, W
+            nobs_features = self.obs_encoder(this_nobs) # batch_size * n_obs_steps, obs_dim
             # reshape back to B, Do
-            global_cond = nobs_features.reshape(batch_size, -1)
+            global_cond = nobs_features.reshape(batch_size, -1) # batch_szie, n_obs_steps * obs_dim
         else:
             # reshape B, T, ... to B*T
             this_nobs = dict_apply(nobs, lambda x: x.reshape(-1, *x.shape[2:]))
@@ -243,6 +243,7 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         noisy_trajectory[condition_mask] = cond_data[condition_mask]
         
         # Predict the noise residual
+        # batch_size, horizon, action_dim
         pred = self.model(noisy_trajectory, timesteps, 
             local_cond=local_cond, global_cond=global_cond)
 

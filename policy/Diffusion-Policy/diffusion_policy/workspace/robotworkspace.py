@@ -70,7 +70,9 @@ class RobotWorkspace(BaseWorkspace):
 
         # resume training
         if cfg.training.resume:
-            lastest_ckpt_path = self.get_checkpoint_path()
+            # lastest_ckpt_path = self.get_checkpoint_path()
+            lastest_ckpt_path = "/home/wzh-2004/RoboTwin/policy/Diffusion-Policy/checkpoints/put_apple_cabinet_D435_20_0/375.ckpt"
+            lastest_ckpt_path = pathlib.Path(lastest_ckpt_path)
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
@@ -253,7 +255,7 @@ class RobotWorkspace(BaseWorkspace):
                         gt_action = batch['action']
                         
                         result = policy.predict_action(obs_dict)
-                        pred_action = result['action']
+                        pred_action = result['action_pred']
                         mse = torch.nn.functional.mse_loss(pred_action, gt_action)
                         step_log['train_action_mse_error'] = mse.item()
                         del batch
@@ -332,7 +334,9 @@ class BCRobotWorkspace(BaseWorkspace):
 
         # resume training
         if cfg.training.resume:
-            lastest_ckpt_path = self.get_checkpoint_path()
+            # lastest_ckpt_path = self.get_checkpoint_path()
+            lastest_ckpt_path = "/home/wzh-2004/RoboTwin/policy/Diffusion-Policy/checkpoints/put_apple_cabinet_bc_D435_20_bc_0/0.ckpt"
+            lastest_ckpt_path = pathlib.Path(lastest_ckpt_path)
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
@@ -511,9 +515,8 @@ class BCRobotWorkspace(BaseWorkspace):
                     with torch.no_grad():
                         # sample trajectory from training set, and evaluate difference
                         batch = train_sampling_batch
-                        obs_dict = batch['obs']
-                        gt_action = batch['action'] # torch.Size([32, 4, 14]) batch_size, horizon, action_dim
-                        
+                        obs_dict = batch['obs'] # batch_size, horizon, action_dim
+                        gt_action = batch['action'] # batch_size, horizon, action_dim
                         result = policy.predict_action(obs_dict)
                         pred_action = result['action_pred'] # torch.Size([32, 3, 14])
                         mse = torch.nn.functional.mse_loss(pred_action, gt_action)
@@ -1045,7 +1048,7 @@ class BCQRobotWorkspace(BaseWorkspace):
                         obs_dict = batch['obs']
                         gt_action = batch['action'] # torch.Size([32, 4, 14]) batch_size, horizon, action_dim
                         result = policy.predict_action(obs_dict)
-                        pred_action = result # torch.Size([32, 3, 14])
+                        pred_action = result['action_pred'] # torch.Size([32, 3, 14])
                         mse = torch.nn.functional.mse_loss(pred_action, gt_action)
                         step_log['train_action_mse_error'] = mse.item()
                         del batch
@@ -1117,7 +1120,9 @@ class BC_BCQRobotWorkspace(BaseWorkspace):
 
         # resume training
         if cfg.training.resume:
-            lastest_ckpt_path = self.get_checkpoint_path()
+            # lastest_ckpt_path = self.get_checkpoint_path()
+            lastest_ckpt_path = "/home/wzh-2004/RoboTwin/policy/Diffusion-Policy/checkpoints/put_apple_cabinet_bc_bcq_D435_20_bc_bcq_0/0.ckpt"
+            lastest_ckpt_path = pathlib.Path(lastest_ckpt_path)
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
@@ -1199,6 +1204,7 @@ class BC_BCQRobotWorkspace(BaseWorkspace):
                     self.model.obs_encoder.eval()
                     self.model.obs_encoder.requires_grad_(False)
 
+                val_losses = list()
                 actor_losses = list()
                 critic_losses = list()
                 with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
@@ -1207,7 +1213,7 @@ class BC_BCQRobotWorkspace(BaseWorkspace):
                         batch = dataset.postprocess(batch, device)
                         if train_sampling_batch is None:
                             train_sampling_batch = batch
-                        raw_critic_loss, raw_actor_loss = self.model.update(batch)
+                        raw_vae_loss, raw_critic_loss, raw_actor_loss = self.model.update(batch)
                         
                         # update ema
                         if cfg.training.use_ema:
@@ -1215,9 +1221,11 @@ class BC_BCQRobotWorkspace(BaseWorkspace):
 
                         # logging
                         tepoch.set_postfix(loss=raw_actor_loss, refresh=False)
+                        val_losses.append(raw_vae_loss)
                         critic_losses.append(raw_critic_loss)
                         actor_losses.append(raw_actor_loss)
                         step_log = {
+                            'vae_loss': raw_vae_loss,
                             'critic_loss': raw_critic_loss,
                             'actor_loss': raw_actor_loss,
                             'global_step': self.global_step,
@@ -1271,7 +1279,7 @@ class BC_BCQRobotWorkspace(BaseWorkspace):
                                     and batch_idx >= (cfg.training.max_val_steps-1):
                                     break
                         if len(val_vae_losses) > 0 and len(val_critic_losses) > 0 and len(val_actor_losses) > 0:
-                            val_vae_loss = torch.mean(torch.tensor(val_critic_losses)).item()
+                            val_vae_loss = torch.mean(torch.tensor(val_vae_losses)).item()
                             val_critic_loss = torch.mean(torch.tensor(val_critic_losses)).item()
                             val_actor_loss = torch.mean(torch.tensor(val_actor_losses)).item()
                             # log epoch average validation loss
@@ -1287,7 +1295,7 @@ class BC_BCQRobotWorkspace(BaseWorkspace):
                         obs_dict = batch['obs']
                         gt_action = batch['action'] # torch.Size([32, 4, 14]) batch_size, horizon, action_dim
                         result = policy.predict_action(obs_dict)
-                        pred_action = result # torch.Size([32, 3, 14])
+                        pred_action = result['action_pred'] # torch.Size([32, 3, 14])
                         mse = torch.nn.functional.mse_loss(pred_action, gt_action)
                         step_log['train_action_mse_error'] = mse.item()
                         del batch

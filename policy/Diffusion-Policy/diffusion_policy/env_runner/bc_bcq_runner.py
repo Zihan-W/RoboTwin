@@ -101,5 +101,7 @@ class BC_BCQRunner:
             action_dict = policy.predict_action(obs_dict_input)
 
         # device_transfer
-        np_action = action_dict.detach().to('cpu').numpy()
-        return np_action
+        np_action_dict = dict_apply(action_dict, lambda x: x.detach().to('cpu').numpy())
+        action = np_action_dict['action']
+        
+        return action

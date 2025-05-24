@@ -25,10 +25,35 @@ class dual_bottles_pick_easy(Base_task):
 
     def load_actors(self):
         # super().setup_scene()
+        # self.red_bottle,_ = rand_create_glb(
+        #     self.scene,
+        #     xlim=[-0.25,-0.05],
+        #     ylim=[0.03,0.23],
+        #     zlim=[0.865],
+        #     modelname="001_bottles",
+        #     rotate_rand=False,
+        #     qpos=[0.707,0.707,0,0],
+        #     scale=(0.132,0.132,0.132),
+        #     model_id=13
+        # )
+
+        # self.green_bottle, _=rand_create_glb(
+        #     self.scene,
+        #     xlim=[0.05,0.25],
+        #     ylim=[0.03,0.23],
+        #     zlim=[0.865],
+        #     modelname="001_bottles",
+        #     rotate_rand=False,
+        #     # qpos=[0.709,0.705,0.015,0.015],
+        #     qpos=[0.707,0.707,0,0],
+        #     scale=(0.161,0.161,0.161),
+        #     model_id=16
+        # )
+
         self.red_bottle,_ = rand_create_glb(
             self.scene,
-            xlim=[-0.25,-0.05],
-            ylim=[0.03,0.23],
+            xlim=[-0.20,-0.10],
+            ylim=[0.08,0.18],
             zlim=[0.865],
             modelname="001_bottles",
             rotate_rand=False,
@@ -39,8 +64,8 @@ class dual_bottles_pick_easy(Base_task):
 
         self.green_bottle, _=rand_create_glb(
             self.scene,
-            xlim=[0.05,0.25],
-            ylim=[0.03,0.23],
+            xlim=[0.10,0.20],
+            ylim=[0.08,0.19],
             zlim=[0.865],
             modelname="001_bottles",
             rotate_rand=False,
